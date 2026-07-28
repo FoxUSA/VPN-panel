@@ -4,7 +4,7 @@
 
 **Веб-панель управления VPN-сервером на одном экране**
 
-AmneziaWG&nbsp;·&nbsp;XRay (VLESS — TLS / Reality)&nbsp;·&nbsp;mtg (MTProto)
+AmneziaWG&nbsp;·&nbsp;XRay (VLESS — TLS / Reality)&nbsp;·&nbsp;mtg (MTProto)&nbsp;·&nbsp;каскад через Mihomo
 
 [![Платформа](https://img.shields.io/badge/platform-Linux-2b2b2b)](https://byfox.dev/awg-panel/)
 [![Бэкенд](https://img.shields.io/badge/backend-Flask-000000?logo=flask&logoColor=white)](https://byfox.dev/awg-panel/)
@@ -13,6 +13,7 @@ AmneziaWG&nbsp;·&nbsp;XRay (VLESS — TLS / Reality)&nbsp;·&nbsp;mtg (MTProto)
 [![AmneziaWG](https://img.shields.io/badge/AmneziaWG-WireGuard-88171a)](https://byfox.dev/awg-panel/)
 [![XRay](https://img.shields.io/badge/XRay-VLESS%20·%20Reality-f40612)](https://byfox.dev/awg-panel/)
 [![MTProto](https://img.shields.io/badge/Telegram-MTProto%20·%20mtg-26a5e4?logo=telegram&logoColor=white)](https://byfox.dev/awg-panel/)
+[![Mihomo](https://img.shields.io/badge/Mihomo-Clash.Meta%20cascade-2ea043)](https://byfox.dev/awg-panel/)
 
 ### [🌐 Сайт проекта](https://byfox.dev/awg-panel/) · [⬇️ Скачать архив](https://byfox.dev/data/awg-panel/awg-panel.zip) · [🇬🇧 English](README.md)
 
@@ -24,7 +25,7 @@ AmneziaWG&nbsp;·&nbsp;XRay (VLESS — TLS / Reality)&nbsp;·&nbsp;mtg (MTProto)
 
 **VPN-panel** — это лёгкая веб-панель, которая собирает управление сразу тремя VPN/прокси-протоколами в одном интерфейсе: **AmneziaWG**, **XRay (VLESS на TLS или Reality)** и **mtg (MTProto-прокси для Telegram)**. Написана на Flask и ванильном JavaScript, **без базы данных** — всё состояние хранится в обычных JSON-файлах рядом с приложением.
 
-Один экран — клиенты, ссылки и QR-коды, лимиты и расписание трафика, логи подключений, обновления и бэкапы.
+Один экран — клиенты, ссылки и QR-коды, лимиты и расписание трафика, логи подключений, обновления и бэкапы. Сервер при этом можно пустить каскадом через второй VPN и маршрутизировать своих клиентов по clash-правилам.
 
 > 📥 **Файлы здесь не выкладываются.** Скачивайте готовый архив напрямую — [byfox.dev/data/awg-panel/awg-panel.zip](https://byfox.dev/data/awg-panel/awg-panel.zip) — или заходите на сайт проекта: [byfox.dev/awg-panel](https://byfox.dev/awg-panel/).
 
@@ -34,6 +35,7 @@ AmneziaWG&nbsp;·&nbsp;XRay (VLESS — TLS / Reality)&nbsp;·&nbsp;mtg (MTProto)
 - **XRay в режимах TLS и Reality** — готовые конфиги для **Shadowrocket / Loon / Clash** с наборами правил маршрутизации (готовые списки blackmatrix7 + свои).
 - **Логи подключений** — IP, гео, домены, статистика трафика, дедупликация и группировка по организациям.
 - **Глобальные правила маршрутизации** — серверный роутинг для всех VLESS, режимы списков/via/direct, применение по кнопке.
+- **Каскад через второй VPN** — встроенный движок **Mihomo (Clash.Meta)** делает сервер клиентом другого VPN: перечисленное в правилах уходит через него, остальное — напрямую.
 - **Маскировка входа** — панель прячется за обычным сайтом-витриной (fake landing).
 - **Бэкапы и авто-проверка зависимостей** — чек-лист настроек сервера с автофиксами.
 - **Обновления из интерфейса** — XRay, mtg и сама панель обновляются по манифесту; отслеживание версий протоколов.
@@ -47,6 +49,17 @@ AmneziaWG&nbsp;·&nbsp;XRay (VLESS — TLS / Reality)&nbsp;·&nbsp;mtg (MTProto)
 | **AmneziaWG** | обфусцированный WireGuard | официальные клиенты AmneziaWG |
 | **XRay / VLESS** | TLS, Reality | Shadowrocket, Loon, Clash |
 | **mtg / MTProto** | Telegram-прокси | Telegram (любой клиент) |
+| **Mihomo (Clash.Meta)** | каскад — сервер как клиент второго VPN | наверх: VLESS, VMess, Trojan, SS, Hysteria2, Hysteria, TUIC, AnyTLS |
+
+## 🔗 Каскад через второй VPN
+
+Панель умеет ставить и вести движок **Mihomo (Clash.Meta)**, превращая сервер в клиента *другого* VPN. Трафик клиентов XRay и MTProto тогда маршрутизируется по clash-правилам, которые отдаёт второй сервер: что перечислено в правилах — уходит через второй VPN, всё остальное выходит напрямую с IP этого сервера.
+
+- **Никакого iptables и никакого TUN.** Трафик попадает в движок только потому, что XRay и mtg сами указывают на его локальный SOCKS-порт — собственный трафик сервера движка не касается, поэтому включением каскада нельзя потерять доступ к панели или SSH.
+- **Профили** — clash-конфиг целиком, ссылка на подписку или просто ссылки на узлы: `vless`, `vmess`, `trojan`, `ss`, `hysteria2`, `hysteria`, `tuic`, `anytls` (подписку можно вставить и одним base64-блоком). Вставленное разбирается и показывается до сохранения. Профилей может быть несколько, активен один.
+- **Безопасный режим** — не блокировка, а предохранитель: движок запускается, даётся пять минут на проверку, и если сервер заблокировали или связь пропала, панель сама снимает каскад с конфигов, гасит движок и выключает автозапуск.
+- **Сторож** — если движок замолчал, каскад снимается с конфигов автоматически, а не оставляет клиентов упираться в мёртвый сокет.
+- Отдельная вкладка **Mihomo**: связь со вторым VPN с задержкой и накопительным трафиком, полученные от него правила, переключение узлов и тумблеры каскада по сервисам.
 
 ## 📸 Скриншоты
 
@@ -90,6 +103,6 @@ AmneziaWG&nbsp;·&nbsp;XRay (VLESS — TLS / Reality)&nbsp;·&nbsp;mtg (MTProto)
 
 **Скачать:** [byfox.dev/data/awg-panel/awg-panel.zip](https://byfox.dev/data/awg-panel/awg-panel.zip) &nbsp;·&nbsp; **Сайт:** [byfox.dev/awg-panel](https://byfox.dev/awg-panel/)
 
-<sub>Ключевые слова: VPN-панель, AmneziaWG, WireGuard, XRay, VLESS, Reality, MTProto, mtg, Shadowrocket, Clash, Loon, VPN-сервер, обход блокировок, анти-цензура, прокси, self-hosted, Flask.</sub>
+<sub>Ключевые слова: VPN-панель, AmneziaWG, WireGuard, XRay, VLESS, Reality, MTProto, mtg, Mihomo, Clash.Meta, Hysteria2, TUIC, каскад VPN, Shadowrocket, Clash, Loon, VPN-сервер, обход блокировок, анти-цензура, прокси, self-hosted, Flask.</sub>
 
 </div>
