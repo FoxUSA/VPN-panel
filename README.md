@@ -36,6 +36,8 @@ One screen for everything: clients, links and QR codes, traffic limits and sched
 - **Connection logs** — IP, geo, domains, traffic stats, deduplication and grouping by organization.
 - **Global routing rules** — server-side routing for all VLESS, list / via / direct modes, applied with one button.
 - **Cascade through a second VPN** — a built-in **Mihomo (Clash.Meta)** engine makes the server a client of another VPN: listed traffic goes out through it, everything else leaves directly.
+- **Per-client DNS** — encrypted DNS (DoH / DoH3 / DoQ) written straight into the Shadowrocket / Loon / Clash profile: ready-made templates or your own resolver, applied to one client or to all at once. The server's own resolver is set separately.
+- **IP filtering** — per-client allow and block lists of addresses and subnets; the rule lives in the server routing, nothing is written into the client config.
 - **Login masking** — the panel hides behind an ordinary decoy website (fake landing).
 - **Backups & automatic dependency check** — a checklist of server settings with auto-fixes.
 - **In-UI updates** — XRay, mtg and the panel itself update via manifest; protocol versions are tracked.
@@ -103,6 +105,6 @@ Translation runs on the client: Russian is the source, the engine translates the
 
 **Download:** [byfox.dev/data/awg-panel/awg-panel.zip](https://byfox.dev/data/awg-panel/awg-panel.zip) &nbsp;·&nbsp; **Website:** [byfox.dev/awg-panel](https://byfox.dev/awg-panel/)
 
-<sub>Keywords: VPN panel, AmneziaWG, WireGuard, XRay, VLESS, Reality, MTProto, mtg, Mihomo, Clash.Meta, Hysteria2, TUIC, VPN cascade, Shadowrocket, Clash, Loon, VPN server, anti-censorship, censorship circumvention, proxy, self-hosted, Flask.</sub>
+<sub>Keywords: VPN panel, AmneziaWG, WireGuard, XRay, VLESS, Reality, MTProto, mtg, Mihomo, Clash.Meta, Hysteria2, TUIC, VPN cascade, Shadowrocket, Clash, Loon, DNS-over-HTTPS, DoH, DoH3, DoQ, IP allowlist, VPN server, anti-censorship, censorship circumvention, proxy, self-hosted, Flask.</sub>
 
 </div>
