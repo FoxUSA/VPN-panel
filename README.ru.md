@@ -36,6 +36,8 @@ AmneziaWG&nbsp;·&nbsp;XRay (VLESS — TLS / Reality)&nbsp;·&nbsp;mtg (MTProto)
 - **Логи подключений** — IP, гео, домены, статистика трафика, дедупликация и группировка по организациям.
 - **Глобальные правила маршрутизации** — серверный роутинг для всех VLESS, режимы списков/via/direct, применение по кнопке.
 - **Каскад через второй VPN** — встроенный движок **Mihomo (Clash.Meta)** делает сервер клиентом другого VPN: перечисленное в правилах уходит через него, остальное — напрямую.
+- **DNS для клиентов** — шифрованный DNS (DoH / DoH3 / DoQ) прямо в профиле Shadowrocket / Loon / Clash: готовые шаблоны или свой резолвер, применение одному клиенту или всем сразу. DNS самого сервера задаётся отдельно.
+- **Фильтрация по IP** — у клиента белый и чёрный списки адресов и подсетей; правило живёт в серверном роутинге, в конфиг клиента ничего не пишется.
 - **Маскировка входа** — панель прячется за обычным сайтом-витриной (fake landing).
 - **Бэкапы и авто-проверка зависимостей** — чек-лист настроек сервера с автофиксами.
 - **Обновления из интерфейса** — XRay, mtg и сама панель обновляются по манифесту; отслеживание версий протоколов.
@@ -103,6 +105,6 @@ AmneziaWG&nbsp;·&nbsp;XRay (VLESS — TLS / Reality)&nbsp;·&nbsp;mtg (MTProto)
 
 **Скачать:** [byfox.dev/data/awg-panel/awg-panel.zip](https://byfox.dev/data/awg-panel/awg-panel.zip) &nbsp;·&nbsp; **Сайт:** [byfox.dev/awg-panel](https://byfox.dev/awg-panel/)
 
-<sub>Ключевые слова: VPN-панель, AmneziaWG, WireGuard, XRay, VLESS, Reality, MTProto, mtg, Mihomo, Clash.Meta, Hysteria2, TUIC, каскад VPN, Shadowrocket, Clash, Loon, VPN-сервер, обход блокировок, анти-цензура, прокси, self-hosted, Flask.</sub>
+<sub>Ключевые слова: VPN-панель, AmneziaWG, WireGuard, XRay, VLESS, Reality, MTProto, mtg, Mihomo, Clash.Meta, Hysteria2, TUIC, каскад VPN, Shadowrocket, Clash, Loon, DNS-over-HTTPS, DoH, DoH3, DoQ, фильтрация по IP, VPN-сервер, обход блокировок, анти-цензура, прокси, self-hosted, Flask.</sub>
 
 </div>
