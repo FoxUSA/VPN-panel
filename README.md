@@ -38,6 +38,7 @@ One screen for everything: clients, links and QR codes, traffic limits and sched
 - **Cascade through a second VPN** — a built-in **Mihomo (Clash.Meta)** engine makes the server a client of another VPN: listed traffic goes out through it, everything else leaves directly.
 - **Per-client DNS** — encrypted DNS (DoH / DoH3 / DoQ) written straight into the Shadowrocket / Loon / Clash profile: ready-made templates or your own resolver, applied to one client or to all at once. The server's own resolver is set separately.
 - **IP filtering** — per-client allow and block lists of addresses and subnets; the rule lives in the server routing, nothing is written into the client config.
+- **External monitoring** — a companion utility on another server watches this one from the outside: XRay/MTProto ports, speed, uptime history and a public status page.
 - **Login masking** — the panel hides behind an ordinary decoy website (fake landing).
 - **Backups & automatic dependency check** — a checklist of server settings with auto-fixes.
 - **In-UI updates** — XRay, mtg and the panel itself update via manifest; protocol versions are tracked.
@@ -63,6 +64,15 @@ The panel can install and manage a **Mihomo (Clash.Meta)** engine, turning the s
 - **Watchdog** — if the engine goes silent, the cascade is removed from the configs automatically instead of leaving clients pointed at a dead socket.
 - A dedicated **Mihomo** tab shows the link to the second VPN with latency and cumulative traffic, the rules received from it, node switching and per-service cascade switches.
 
+## 🩺 External monitoring
+
+A separate lightweight utility is installed on **another** server — ideally in the country your users connect from — and watches this one from the outside. Download: **[byfox.dev/data/awg-panel/monitoring.zip](https://byfox.dev/data/awg-panel/monitoring.zip)**
+
+- **Ports** — TCP checks of XRay and MTProto with retries and a debounce, so a single lost SYN never raises a false alarm. The ports are pulled from the panel itself over a token-protected probe API, so they can't go stale after a change on the server.
+- **Speed** — down and up measurement against the panel, with presets that trade traffic for resolution: from *availability only* (zero traffic) to a dense debug mode. Every measurement's cost is shown before you save.
+- **History** — per-server uptime bars, an outage log with durations, all in SQLite next to the utility.
+- **Two faces** — a public status page for your users and a password-protected admin area for you. Nothing you type lives in the code: password, servers and settings sit in `data/` and survive updates, which the utility applies to itself from the same CDN.
+
 ## 📸 Screenshots
 
 | Overview | Routing templates |
@@ -72,6 +82,8 @@ The panel can install and manage a **Mihomo (Clash.Meta)** engine, turning the s
 | [![Logs](https://byfox.dev/awg-panel/img/awg-panel-logs.png)](https://byfox.dev/awg-panel/img/awg-panel-logs.png) | [![MTProto](https://byfox.dev/awg-panel/img/awg-panel-mtproto.png)](https://byfox.dev/awg-panel/img/awg-panel-mtproto.png) |
 | **Settings** | **Traffic schedule** |
 | [![Settings](https://byfox.dev/awg-panel/img/awg-panel-settings.png)](https://byfox.dev/awg-panel/img/awg-panel-settings.png) | [![Schedule](https://byfox.dev/awg-panel/img/awg-panel-schedule.png)](https://byfox.dev/awg-panel/img/awg-panel-schedule.png) |
+| **External monitoring** | **Client config** |
+| [![Monitoring](https://byfox.dev/awg-panel/img/awg-panel-monitoring.png)](https://byfox.dev/awg-panel/img/awg-panel-monitoring.png) | [![Config](https://byfox.dev/awg-panel/img/awg-panel-config.png)](https://byfox.dev/awg-panel/img/awg-panel-config.png) |
 
 ## 🚀 Installation
 
@@ -105,6 +117,6 @@ Translation runs on the client: Russian is the source, the engine translates the
 
 **Download:** [byfox.dev/data/awg-panel/awg-panel.zip](https://byfox.dev/data/awg-panel/awg-panel.zip) &nbsp;·&nbsp; **Website:** [byfox.dev/awg-panel](https://byfox.dev/awg-panel/)
 
-<sub>Keywords: VPN panel, AmneziaWG, WireGuard, XRay, VLESS, Reality, MTProto, mtg, Mihomo, Clash.Meta, Hysteria2, TUIC, VPN cascade, Shadowrocket, Clash, Loon, DNS-over-HTTPS, DoH, DoH3, DoQ, IP allowlist, VPN server, anti-censorship, censorship circumvention, proxy, self-hosted, Flask.</sub>
+<sub>Keywords: VPN panel, AmneziaWG, WireGuard, XRay, VLESS, Reality, MTProto, mtg, Mihomo, Clash.Meta, Hysteria2, TUIC, VPN cascade, Shadowrocket, Clash, Loon, DNS-over-HTTPS, DoH, DoH3, DoQ, IP allowlist, uptime monitoring, status page, VPN server, anti-censorship, censorship circumvention, proxy, self-hosted, Flask.</sub>
 
 </div>
