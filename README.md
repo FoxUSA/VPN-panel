@@ -4,7 +4,7 @@
 
 **Manage your VPN server from a single screen**
 
-AmneziaWG&nbsp;·&nbsp;XRay (VLESS — TLS / Reality)&nbsp;·&nbsp;mtg (MTProto)&nbsp;·&nbsp;Mihomo cascade
+AmneziaWG&nbsp;·&nbsp;XRay (VLESS — TLS / Reality)&nbsp;·&nbsp;mtg (MTProto)&nbsp;·&nbsp;Hysteria 2&nbsp;·&nbsp;Mihomo cascade
 
 [![Platform](https://img.shields.io/badge/platform-Linux-2b2b2b)](https://byfox.dev/awg-panel/)
 [![Backend](https://img.shields.io/badge/backend-Flask-000000?logo=flask&logoColor=white)](https://byfox.dev/awg-panel/)
@@ -13,6 +13,7 @@ AmneziaWG&nbsp;·&nbsp;XRay (VLESS — TLS / Reality)&nbsp;·&nbsp;mtg (MTProto)
 [![AmneziaWG](https://img.shields.io/badge/AmneziaWG-WireGuard-88171a)](https://byfox.dev/awg-panel/)
 [![XRay](https://img.shields.io/badge/XRay-VLESS%20·%20Reality-f40612)](https://byfox.dev/awg-panel/)
 [![MTProto](https://img.shields.io/badge/Telegram-MTProto%20·%20mtg-26a5e4?logo=telegram&logoColor=white)](https://byfox.dev/awg-panel/)
+[![Hysteria2](https://img.shields.io/badge/Hysteria-2-ff6b35)](https://byfox.dev/awg-panel/)
 [![Mihomo](https://img.shields.io/badge/Mihomo-Clash.Meta%20cascade-2ea043)](https://byfox.dev/awg-panel/)
 
 ### [🌐 Website](https://byfox.dev/awg-panel/) · [⬇️ Download](https://byfox.dev/data/awg-panel/awg-panel.zip) · [🇷🇺 Русский](README.ru.md)
@@ -23,7 +24,7 @@ AmneziaWG&nbsp;·&nbsp;XRay (VLESS — TLS / Reality)&nbsp;·&nbsp;mtg (MTProto)
 
 ---
 
-**VPN-panel** is a lightweight web panel that brings management of three VPN/proxy protocols into a single interface: **AmneziaWG**, **XRay (VLESS over TLS or Reality)** and **mtg (MTProto proxy for Telegram)**. Built on Flask and vanilla JavaScript, with **no database** — all state lives in plain JSON files next to the app.
+**VPN-panel** is a lightweight web panel that brings management of four VPN/proxy protocols into a single interface: **AmneziaWG**, **XRay (VLESS over TLS or Reality)**, **mtg (MTProto proxy for Telegram)** and **Hysteria 2**. Built on Flask and vanilla JavaScript, with **no database** — all state lives in plain JSON files next to the app.
 
 One screen for everything: clients, links and QR codes, traffic limits and schedules, connection logs, updates and backups. The server can also be cascaded through a second VPN, routing its clients by clash rules.
 
@@ -31,7 +32,8 @@ One screen for everything: clients, links and QR codes, traffic limits and sched
 
 ## ✨ Features
 
-- **AWG / XRay / mtg clients** — create, delete, share links and QR codes, traffic limits and schedule, online status.
+- **AWG / XRay / mtg / Hysteria 2 clients** — create, delete, share links and QR codes, traffic limits and schedule, online status.
+- **Protocol installation from the panel** — XRay, mtg and Hysteria 2 are installed with a button: the panel drops the binary, generates the config, picks a free port and opens it in the firewall (AmneziaWG is manual — it's a kernel module).
 - **XRay in TLS and Reality modes** — ready-made configs for **Shadowrocket / Loon / Clash** with routing rule sets (built-in blackmatrix7 lists + your own).
 - **Connection logs** — IP, geo, domains, traffic stats, deduplication and grouping by organization.
 - **Global routing rules** — server-side routing for all VLESS, list / via / direct modes, applied with one button.
@@ -52,6 +54,7 @@ One screen for everything: clients, links and QR codes, traffic limits and sched
 | **AmneziaWG** | obfuscated WireGuard | official AmneziaWG apps |
 | **XRay / VLESS** | TLS, Reality | Shadowrocket, Loon, Clash |
 | **mtg / MTProto** | Telegram proxy | Telegram (any client) |
+| **Hysteria 2** | QUIC-based, obfuscated | Shadowrocket, Clash/Mihomo (Loon via a manual profile line) |
 | **Mihomo (Clash.Meta)** | cascade — the server as a client of a second VPN | upstream: VLESS, VMess, Trojan, SS, Hysteria2, Hysteria, TUIC, AnyTLS |
 
 ## 🔗 Cascade through a second VPN
