@@ -87,6 +87,8 @@ AmneziaWG&nbsp;·&nbsp;XRay (VLESS — TLS / Reality)&nbsp;·&nbsp;mtg (MTProto)
 | [![Настройки](https://byfox.dev/awg-panel/img/awg-panel-settings.png)](https://byfox.dev/awg-panel/img/awg-panel-settings.png) | [![Расписание](https://byfox.dev/awg-panel/img/awg-panel-schedule.png)](https://byfox.dev/awg-panel/img/awg-panel-schedule.png) |
 | **Внешний мониторинг** | **Конфиг клиента** |
 | [![Мониторинг](https://byfox.dev/awg-panel/img/awg-panel-monitoring.png)](https://byfox.dev/awg-panel/img/awg-panel-monitoring.png) | [![Конфиг](https://byfox.dev/awg-panel/img/awg-panel-config.png)](https://byfox.dev/awg-panel/img/awg-panel-config.png) |
+| **Карточка клиента** | |
+| [![Карточка клиента](https://byfox.dev/awg-panel/img/awg-panel-client-card.png)](https://byfox.dev/awg-panel/img/awg-panel-client-card.png) | |
 
 ## 🚀 Установка
 
