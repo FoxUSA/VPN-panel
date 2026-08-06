@@ -87,6 +87,8 @@ A separate lightweight utility is installed on **another** server — ideally in
 | [![Settings](https://byfox.dev/awg-panel/img/awg-panel-settings.png)](https://byfox.dev/awg-panel/img/awg-panel-settings.png) | [![Schedule](https://byfox.dev/awg-panel/img/awg-panel-schedule.png)](https://byfox.dev/awg-panel/img/awg-panel-schedule.png) |
 | **External monitoring** | **Client config** |
 | [![Monitoring](https://byfox.dev/awg-panel/img/awg-panel-monitoring.png)](https://byfox.dev/awg-panel/img/awg-panel-monitoring.png) | [![Config](https://byfox.dev/awg-panel/img/awg-panel-config.png)](https://byfox.dev/awg-panel/img/awg-panel-config.png) |
+| **Client card** | |
+| [![Client card](https://byfox.dev/awg-panel/img/awg-panel-client-card.png)](https://byfox.dev/awg-panel/img/awg-panel-client-card.png) | |
 
 ## 🚀 Installation
 
