@@ -33,6 +33,7 @@ AmneziaWG&nbsp;·&nbsp;XRay (VLESS — TLS / Reality)&nbsp;·&nbsp;mtg (MTProto)
 ## ✨ Возможности
 
 - **Клиенты AWG / XRay / mtg / Hysteria 2** — добавление, удаление, ссылки и QR-коды, лимиты и расписание трафика, онлайн-статус.
+- **Hysteria 2 внутри XRay** — Hysteria 2 можно включить вторым инбаундом XRay: каждый VLESS-клиент получает и ссылку `hysteria2://` со своим QR, а в профилях Shadowrocket/Loon/Clash появляется второй узел. Один клиент, один счётчик трафика, одни правила.
 - **Установка протоколов из панели** — XRay, mtg и Hysteria 2 ставятся кнопкой: панель кладёт бинарь, генерирует конфиг, подбирает свободный порт и открывает его в фаерволе (AmneziaWG — вручную, это модуль ядра).
 - **XRay в режимах TLS и Reality** — готовые конфиги для **Shadowrocket / Loon / Clash** с наборами правил маршрутизации (готовые списки blackmatrix7 + свои).
 - **Логи подключений** — IP, гео, домены, статистика трафика, дедупликация и группировка по организациям.
@@ -52,9 +53,9 @@ AmneziaWG&nbsp;·&nbsp;XRay (VLESS — TLS / Reality)&nbsp;·&nbsp;mtg (MTProto)
 | Протокол | Режимы | Клиенты |
 |---|---|---|
 | **AmneziaWG** | обфусцированный WireGuard | официальные клиенты AmneziaWG |
-| **XRay / VLESS** | TLS, Reality | Shadowrocket, Loon, Clash |
+| **XRay / VLESS** | TLS, Reality; опционально инбаунд Hysteria 2 | Shadowrocket, Loon, Clash |
 | **mtg / MTProto** | Telegram-прокси | Telegram (любой клиент) |
-| **Hysteria 2** | обфусцированный, поверх QUIC | Shadowrocket, Clash/Mihomo (для Loon — вручную строкой профиля) |
+| **Hysteria 2** | обфусцированный, поверх QUIC | Shadowrocket, Loon, Clash |
 | **Mihomo (Clash.Meta)** | каскад — сервер как клиент второго VPN | наверх: VLESS, VMess, Trojan, SS, Hysteria2, Hysteria, TUIC, AnyTLS |
 
 ## 🔗 Каскад через второй VPN
