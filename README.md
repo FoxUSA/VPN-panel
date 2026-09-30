@@ -2,9 +2,9 @@
 
 # 🛡️ VPN-panel
 
-**Your own VPN server, one screen.**
+**A web panel to administer your own VPN server.**
 
-AmneziaWG · XRay · Hysteria 2 · MTProto — installed with a button, clients get their config by QR.
+Users, access rules, ready-made rule templates, logs and stats — in one browser window.
 
 [![Platform](https://img.shields.io/badge/platform-Linux-2b2b2b)](https://byfox.dev/awg-panel/)
 [![Self-hosted](https://img.shields.io/badge/self--hosted-free-2ea043)](https://byfox.dev/awg-panel/)
@@ -12,26 +12,27 @@ AmneziaWG · XRay · Hysteria 2 · MTProto — installed with a button, clients 
 
 ### [⬇️ Download](https://byfox.dev/data/awg-panel/awg-panel.zip) · [🌐 Website](https://byfox.dev/awg-panel/) · [🇷🇺 Русский](README.ru.md)
 
-<img src="https://byfox.dev/awg-panel/img/awg-panel-overview.png" alt="VPN-panel" width="760">
-
 </div>
 
-## Features
+<p align="center">
+<a href="https://byfox.dev/awg-panel/img/awg-panel-overview.png"><img src="https://byfox.dev/awg-panel/img/awg-panel-overview.png" height="140" alt="overview"></a>
+<a href="https://byfox.dev/awg-panel/img/awg-panel-client-card.png"><img src="https://byfox.dev/awg-panel/img/awg-panel-client-card.png" height="140" alt="client-card"></a>
+<a href="https://byfox.dev/awg-panel/img/awg-panel-config.png"><img src="https://byfox.dev/awg-panel/img/awg-panel-config.png" height="140" alt="config"></a>
+<a href="https://byfox.dev/awg-panel/img/awg-panel-settings.png"><img src="https://byfox.dev/awg-panel/img/awg-panel-settings.png" height="140" alt="settings"></a>
+<a href="https://byfox.dev/awg-panel/img/awg-panel-logs.png"><img src="https://byfox.dev/awg-panel/img/awg-panel-logs.png" height="140" alt="logs"></a>
+<a href="https://byfox.dev/awg-panel/img/awg-panel-templates.png"><img src="https://byfox.dev/awg-panel/img/awg-panel-templates.png" height="140" alt="templates"></a>
+<a href="https://byfox.dev/awg-panel/img/awg-panel-schedule.png"><img src="https://byfox.dev/awg-panel/img/awg-panel-schedule.png" height="140" alt="schedule"></a>
+<a href="https://byfox.dev/awg-panel/img/awg-panel-monitoring.png"><img src="https://byfox.dev/awg-panel/img/awg-panel-monitoring.png" height="140" alt="monitoring"></a>
+</p>
 
-- **Four protocols** — AmneziaWG, XRay/VLESS, Hysteria 2 and MTProto as tabs of one panel.
-- **One-click install** — protocols are installed and updated from the panel, no SSH.
-- **Hysteria 2 inside XRay** — one client, two links: VLESS over TCP and Hysteria 2 over UDP.
-- **Instant configs** — QR and subscription for Shadowrocket, Loon and Clash.
-- **Routing rules** — what goes through the VPN and what goes direct, by service and country.
-- **In control** — traffic limits, geo-enriched logs, backups, cascade through a second VPN.
+Installs on your VPS and replaces hand-editing configs over SSH. You add users, decide who may do what, and see where they go. The user gets a QR code or a link — and it just works.
 
-## Screenshots
-
-| Client config | Client rules |
-|---|---|
-| [![Config](https://byfox.dev/awg-panel/img/awg-panel-config.png)](https://byfox.dev/awg-panel/img/awg-panel-config.png) | [![Rules](https://byfox.dev/awg-panel/img/awg-panel-client-card.png)](https://byfox.dev/awg-panel/img/awg-panel-client-card.png) |
-| **MTProto** | **Settings** |
-| [![MTProto](https://byfox.dev/awg-panel/img/awg-panel-mtproto.png)](https://byfox.dev/awg-panel/img/awg-panel-mtproto.png) | [![Settings](https://byfox.dev/awg-panel/img/awg-panel-settings.png)](https://byfox.dev/awg-panel/img/awg-panel-settings.png) |
+- **VPN users** — add, disable, delete, set a traffic limit or an expiry date, hand out the config by QR.
+- **Flexible permissions** — every user has their own rules: what goes through the VPN, what goes direct, what is blocked.
+- **Ready-made rule templates** — hundreds of services and countries, picked by search, updated automatically.
+- **Logs & stats** — traffic, online status, where the user goes — with geo for every IP.
+- **Cascade through a second VPN** — the server itself can reach the internet through another VPN, for the services you choose.
+- **Protocols with one click** — AmneziaWG, XRay, Hysteria 2 and MTProto are installed and updated from the panel. Hysteria 2 also runs inside XRay.
 
 ## Install
 
