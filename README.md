@@ -34,7 +34,7 @@ One screen for everything: clients, links and QR codes, traffic limits and sched
 
 - **AWG / XRay / mtg / Hysteria 2 clients** — create, delete, share links and QR codes, traffic limits and schedule, online status.
 - **Hysteria 2 inside XRay** — Hysteria 2 can run as a second XRay inbound: every VLESS client also gets a `hysteria2://` link with its own QR and a second node in its Shadowrocket/Loon/Clash profiles. One client, one traffic counter, one rule set.
-- **Protocol installation from the panel** — XRay, mtg and Hysteria 2 are installed with a button: the panel drops the binary, generates the config, picks a free port and opens it in the firewall (AmneziaWG is manual — it's a kernel module).
+- **Protocol installation from the panel** — AmneziaWG, XRay, mtg and Hysteria 2 are installed with a button: the panel drops the binary (for AWG it builds the DKMS kernel module), generates the config, picks a free port and opens it in the firewall.
 - **XRay in TLS and Reality modes** — ready-made configs for **Shadowrocket / Loon / Clash** with routing rule sets (built-in blackmatrix7 lists + your own).
 - **Connection logs** — IP, geo, domains, traffic stats, deduplication and grouping by organization.
 - **Global routing rules** — server-side routing for all VLESS, list / via / direct modes, applied with one button.
@@ -44,7 +44,7 @@ One screen for everything: clients, links and QR codes, traffic limits and sched
 - **External monitoring** — a companion utility on another server watches this one from the outside: XRay/MTProto ports, speed, uptime history and a public status page.
 - **Login masking** — the panel hides behind an ordinary decoy website (fake landing).
 - **Backups & automatic dependency check** — a checklist of server settings with auto-fixes.
-- **In-UI updates** — XRay, mtg and the panel itself update via manifest; protocol versions are tracked.
+- **In-UI updates** — XRay, mtg, AmneziaWG, Hysteria and the panel itself update via manifest; protocol versions are tracked.
 - **Admin audit log** — logins, settings and client changes.
 - **Bilingual UI (EN / RU)** — language auto-detected on login, 🌐 toggle, live translation with no reload.
 
