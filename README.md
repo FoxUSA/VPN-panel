@@ -18,7 +18,7 @@ AmneziaWG&nbsp;·&nbsp;XRay (VLESS — TLS / Reality)&nbsp;·&nbsp;mtg (MTProto)
 
 ### [🌐 Website](https://byfox.dev/awg-panel/) · [⬇️ Download](https://byfox.dev/data/awg-panel/awg-panel.zip) · [🇷🇺 Русский](README.ru.md)
 
-<img src="https://byfox.dev/awg-panel/img/awg-panel-overview-en.png" alt="VPN-panel overview" width="860">
+<img src="https://byfox.dev/awg-panel/img/awg-panel-overview.png" alt="VPN-panel overview" width="860">
 
 </div>
 
@@ -33,6 +33,7 @@ One screen for everything: clients, links and QR codes, traffic limits and sched
 ## ✨ Features
 
 - **AWG / XRay / mtg / Hysteria 2 clients** — create, delete, share links and QR codes, traffic limits and schedule, online status.
+- **Hysteria 2 inside XRay** — Hysteria 2 can run as a second XRay inbound: every VLESS client also gets a `hysteria2://` link with its own QR and a second node in its Shadowrocket/Loon/Clash profiles. One client, one traffic counter, one rule set.
 - **Protocol installation from the panel** — XRay, mtg and Hysteria 2 are installed with a button: the panel drops the binary, generates the config, picks a free port and opens it in the firewall (AmneziaWG is manual — it's a kernel module).
 - **XRay in TLS and Reality modes** — ready-made configs for **Shadowrocket / Loon / Clash** with routing rule sets (built-in blackmatrix7 lists + your own).
 - **Connection logs** — IP, geo, domains, traffic stats, deduplication and grouping by organization.
@@ -52,9 +53,9 @@ One screen for everything: clients, links and QR codes, traffic limits and sched
 | Protocol | Modes | Clients |
 |---|---|---|
 | **AmneziaWG** | obfuscated WireGuard | official AmneziaWG apps |
-| **XRay / VLESS** | TLS, Reality | Shadowrocket, Loon, Clash |
+| **XRay / VLESS** | TLS, Reality; optional Hysteria 2 inbound | Shadowrocket, Loon, Clash |
 | **mtg / MTProto** | Telegram proxy | Telegram (any client) |
-| **Hysteria 2** | QUIC-based, obfuscated | Shadowrocket, Clash/Mihomo (Loon via a manual profile line) |
+| **Hysteria 2** | QUIC-based, obfuscated | Shadowrocket, Loon, Clash |
 | **Mihomo (Clash.Meta)** | cascade — the server as a client of a second VPN | upstream: VLESS, VMess, Trojan, SS, Hysteria2, Hysteria, TUIC, AnyTLS |
 
 ## 🔗 Cascade through a second VPN
