@@ -32,7 +32,7 @@ Installs on your VPS and replaces hand-editing configs over SSH. You add users, 
 - **Ready-made rule templates** — hundreds of services and countries, picked by search, updated automatically.
 - **Logs & stats** — traffic, online status, where the user goes — with geo for every IP.
 - **Cascade through a second VPN** — the server itself can reach the internet through another VPN, for the services you choose.
-- **Protocols with one click** — AmneziaWG, XRay, Hysteria 2 and MTProto are installed and updated from the panel. Hysteria 2 also runs inside XRay.
+- **Protocols with one click** — AmneziaWG, XRay, Hysteria 2 and MTProto are installed and updated from the panel. Hysteria 2 also runs inside XRay, and with core 26.9.30 — XDNS: VLESS over a DNS tunnel for networks where only DNS gets through.
 
 ## Install
 
@@ -45,5 +45,5 @@ Debian/Ubuntu. Step-by-step guide inside the archive: `install_interactive.html`
 ---
 
 <div align="center">
-<sub>VPN panel · AmneziaWG · WireGuard · XRay · VLESS · Reality · Hysteria2 · MTProto · Shadowrocket · Loon · Clash · self-hosted</sub>
+<sub>VPN panel · AmneziaWG · WireGuard · XRay · VLESS · Reality · Hysteria2 · XDNS · MTProto · Shadowrocket · Loon · Clash · self-hosted</sub>
 </div>
