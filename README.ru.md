@@ -32,7 +32,7 @@
 - **Готовые шаблоны правил** — сотни сервисов и страны, выбираются поиском, обновляются сами.
 - **Логи и статистика** — трафик, онлайн, куда ходит пользователь — с гео по каждому IP.
 - **Каскад через второй VPN** — сам сервер может выходить в интернет через другой VPN — для нужных сервисов.
-- **Протоколы кнопкой** — AmneziaWG, XRay, Hysteria 2 и MTProto ставятся и обновляются из панели. Hysteria 2 работает и внутри XRay.
+- **Протоколы кнопкой** — AmneziaWG, XRay, Hysteria 2 и MTProto ставятся и обновляются из панели. Hysteria 2 работает и внутри XRay, а с ядром 26.9.30 — XDNS: VLESS через DNS-туннель, когда открыт только DNS.
 
 ## Установка
 
@@ -45,5 +45,5 @@ Debian/Ubuntu. Пошаговая инструкция — в архиве: `ins
 ---
 
 <div align="center">
-<sub>VPN-панель · AmneziaWG · WireGuard · XRay · VLESS · Reality · Hysteria2 · MTProto · Shadowrocket · Loon · Clash · self-hosted</sub>
+<sub>VPN-панель · AmneziaWG · WireGuard · XRay · VLESS · Reality · Hysteria2 · XDNS · MTProto · Shadowrocket · Loon · Clash · self-hosted</sub>
 </div>
