@@ -9,6 +9,7 @@ Users, access rules, ready-made rule templates, logs and stats — in one browse
 [![Platform](https://img.shields.io/badge/platform-Linux-2b2b2b)](https://byfox.dev/awg-panel/)
 [![Self-hosted](https://img.shields.io/badge/self--hosted-free-2ea043)](https://byfox.dev/awg-panel/)
 [![i18n](https://img.shields.io/badge/UI-EN%20%2F%20RU-1f6feb)](https://byfox.dev/awg-panel/)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 
 ### [⬇️ Download](https://byfox.dev/data/awg-panel/awg-panel.zip) · [▶️ Live demo](https://byfox.dev/awg-panel/demo/?lang=en) · [🌐 Website](https://byfox.dev/awg-panel/) · [🇷🇺 Русский](README.ru.md)
 
@@ -30,6 +31,12 @@ Installs on your VPS and replaces hand-editing configs over SSH. You add users, 
 3. Open the panel — it creates the password itself
 
 Debian/Ubuntu. Step-by-step guide inside the archive: `install_interactive.html`.
+
+## Source code & license
+
+The [archive](https://byfox.dev/data/awg-panel/awg-panel.zip) **is the source code** — Python (Flask) and vanilla JavaScript, no build or compilation step. Unpack it and read everything the panel runs.
+
+Licensed under the [GNU AGPL-3.0](LICENSE) (or any later version): use, study and modify freely; if you distribute a modified panel or let others use it over a network, publish your changes under the same terms.
 
 ---
 
