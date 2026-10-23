@@ -9,6 +9,7 @@
 [![Platform](https://img.shields.io/badge/platform-Linux-2b2b2b)](https://byfox.dev/awg-panel/)
 [![Self-hosted](https://img.shields.io/badge/self--hosted-free-2ea043)](https://byfox.dev/awg-panel/)
 [![i18n](https://img.shields.io/badge/UI-RU%20%2F%20EN-1f6feb)](https://byfox.dev/awg-panel/)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 
 ### [⬇️ Скачать](https://byfox.dev/data/awg-panel/awg-panel.zip) · [▶️ Демо](https://byfox.dev/awg-panel/demo/?lang=ru) · [🌐 Сайт](https://byfox.dev/awg-panel/) · [🇬🇧 English](README.md)
 
@@ -30,6 +31,12 @@
 3. Открыть панель — пароль она создаст сама
 
 Debian/Ubuntu. Пошаговая инструкция — в архиве: `install_interactive.html`.
+
+## Исходный код и лицензия
+
+[Архив](https://byfox.dev/data/awg-panel/awg-panel.zip) — **это и есть исходный код**: Python (Flask) и чистый JavaScript, без сборки и компиляции. Распакуйте и читайте всё, что выполняет панель.
+
+Лицензия — [GNU AGPL-3.0](LICENSE) (или любая более поздняя версия): пользоваться, изучать и менять можно свободно; кто распространяет изменённую панель или даёт другим пользоваться ею по сети, обязан открыть свои изменения на тех же условиях.
 
 ---
 
