@@ -5606,6 +5606,7 @@ function _dnsFillForm(dns) {
   const isH3 = (dns.doh || '').indexOf('h3://') === 0;
   document.getElementById('dnsFallbackRow').style.display = isH3 ? '' : 'none';
   _dnsSyncDisabled();
+  _dnsCheckReset();
 }
 
 // Тумблер фолбэка показываем только когда введён h3:// (для https/quic не нужен).
@@ -5630,7 +5631,7 @@ function _dnsSyncDisabled() {
   if (row) row.classList.toggle('is-on', off);
 }
 
-function _onDnsOffToggle() { _dnsSyncDisabled(); }
+function _onDnsOffToggle() { _dnsSyncDisabled(); _dnsCheckReset(); }
 
 function _onDnsTemplatePick() {
   const id = document.getElementById('dnsTemplateSel').value;
@@ -5642,6 +5643,7 @@ function _onDnsTemplatePick() {
   document.getElementById('dnsPlainInput').value = (tpl.plain || []).join(', ');
   document.getElementById('dnsDohInput').value = tpl.doh || '';
   _dnsSyncFallback();
+  _dnsCheckReset();
 }
 
 function _onDnsFieldEdit() {
@@ -5649,6 +5651,7 @@ function _onDnsFieldEdit() {
   // при любом ID/схеме; чужой хост → «Свой».
   document.getElementById('dnsTemplateSel').value = _dnsMatchTemplateId(document.getElementById('dnsDohInput').value);
   _dnsSyncFallback();
+  _dnsCheckReset();
 }
 
 function _dnsCollect() {
@@ -5659,6 +5662,64 @@ function _dnsCollect() {
   // Фолбэк осмыслен только для h3:// — иначе всегда false.
   const fallback = doh.indexOf('h3://') === 0 && document.getElementById('dnsFallbackSwitch').checked;
   return {mode: 'set', template, plain, doh, fallback};
+}
+
+// Кнопка «Проверить»: сервер спрашивает каждый введённый резолвер про example.com
+// и doubleclick.net (modules/dns_check.py). Правка полей сбрасывает результат.
+let _dnsCheckSeq = 0;
+function _dnsCheckReset() {
+  _dnsCheckSeq++;
+  const out = document.getElementById('dnsCheckOut');
+  if (out) { out.innerHTML = ''; out.classList.add('hidden'); }
+  const btn = document.getElementById('dnsCheckBtn');
+  if (btn) btn.disabled = document.getElementById('dnsOffSwitch').checked;
+}
+
+function _dnsCheckLineHtml(x) {
+  const srv = x.kind === 'UDP' ? x.server : (_dnsHost(x.server) || x.server);
+  let h = `<div class="dns-check-line ${x.ok ? 'ok' : 'bad'}"><span class="mk">${x.ok ? '✓' : '✗'}</span>`
+        + `<span class="srv">${escHtml(srv)}</span><span class="kind">${escHtml(x.kind || '')}</span> — `;
+  if (x.ok) {
+    h += `<span class="st">отвечает, ${Number(x.ms) || 0} мс</span>`;
+    if (x.ads) h += ` · <span class="ads">режет рекламу</span>`;
+  } else {
+    h += `<span class="st">не отвечает</span>: <span>${escHtml(x.error || '')}</span>`;
+  }
+  h += '</div>';
+  if (x.note) h += `<div class="dns-check-sub">${escHtml(x.note)}</div>`;
+  return h;
+}
+
+async function checkDnsModal() {
+  const out = document.getElementById('dnsCheckOut');
+  const btn = document.getElementById('dnsCheckBtn');
+  const plain = document.getElementById('dnsPlainInput').value.split(',').map(s => s.trim()).filter(Boolean);
+  const doh = document.getElementById('dnsDohInput').value.trim();
+  const seq = ++_dnsCheckSeq;
+  out.classList.remove('hidden');
+  if (!plain.length && !doh) {
+    out.innerHTML = '<div class="dns-check-line bad"><span class="st">Сначала введите адрес DNS</span></div>';
+    return;
+  }
+  out.innerHTML = '<div class="dns-check-foot">Проверяю с сервера…</div>';
+  btn.disabled = true;
+  try {
+    const r = await fetch(API + '/api/dns/check', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({plain, doh}),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (seq !== _dnsCheckSeq) return;
+    if (!r.ok || !Array.isArray(j.results)) {
+      out.innerHTML = `<div class="dns-check-line bad"><span class="st">${escHtml(j.error || 'Проверка не удалась')}</span></div>`;
+      return;
+    }
+    out.innerHTML = j.results.map(_dnsCheckLineHtml).join('')
+      + '<div class="dns-check-foot">Проверка идёт с сервера. У клиента провайдер может резать DoH и QUIC.</div>';
+  } catch (e) {
+    if (seq === _dnsCheckSeq) out.innerHTML = '<div class="dns-check-line bad"><span class="st">Проверка не удалась</span></div>';
+  } finally {
+    if (seq === _dnsCheckSeq) btn.disabled = false;
+  }
 }
 
 function _onDnsBulkToggle(el) { if (_dnsTarget) _dnsTarget.bulk = !!el.checked; }

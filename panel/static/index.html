@@ -3697,7 +3697,10 @@ body::before {
       </div>
     </div>
 
+    <div id="dnsCheckOut" class="dns-check hidden"></div>
+
     <div style="display:flex;justify-content:flex-end;gap:6px;margin-top:12px;">
+      <button class="btn btn-sm btn-ghost" id="dnsCheckBtn" style="margin-right:auto;" onclick="checkDnsModal()" title="Спросить каждый резолвер с сервера: отвечает ли, за сколько, режет ли рекламу">Проверить</button>
       <button class="btn btn-sm btn-ghost" onclick="closeModal('dnsModal')">Отмена</button>
       <button class="btn btn-sm btn-success" id="dnsApplyBtn" onclick="applyDnsModal()">Применить</button>
     </div>
@@ -3734,6 +3737,17 @@ body::before {
 .dns-modal .dns-select:disabled, .dns-modal .dns-input:disabled { opacity: .6; cursor: not-allowed; }
 .dns-note { font-size: 11px; color: var(--text3); line-height: 1.4; }
 .dns-note code { background: var(--surface2); padding: 0 4px; border-radius: 3px; }
+.dns-check { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); font-size: 12px; line-height: 1.5; display: flex; flex-direction: column; gap: 4px; }
+.dns-check.hidden { display: none; }
+.dns-check-line { color: var(--text2); overflow-wrap: anywhere; }
+.dns-check-line .mk { font-weight: 700; margin-right: 6px; }
+.dns-check-line.ok .mk { color: var(--green, #4ade80); }
+.dns-check-line.bad .mk, .dns-check-line.bad .st { color: var(--red, #f87171); }
+.dns-check-line .srv { color: var(--text); font-family: var(--mono, monospace); }
+.dns-check-line .kind { font-size: 10px; color: var(--text3); border: 1px solid var(--border2); border-radius: 4px; padding: 0 4px; margin-left: 6px; }
+.dns-check-line .ads { color: var(--accent); }
+.dns-check-sub { color: var(--text3); font-size: 11px; padding-left: 18px; }
+.dns-check-foot { color: var(--text3); font-size: 11px; margin-top: 2px; }
 </style>
 
 <div id="allowIpModal" class="modal-overlay hidden">

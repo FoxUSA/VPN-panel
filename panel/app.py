@@ -5365,6 +5365,21 @@ def api_dns_default():
         resp['warning'] = f'XRay config: {xray_err}'
     return jsonify(resp)
 
+@app.route('/api/dns/check', methods=['POST'])
+@login_required
+def api_dns_check():
+    """Кнопка «Проверить» в модалке DNS: отвечает ли каждый введённый резолвер,
+    за сколько и режет ли рекламу. Проверка идёт с сервера (modules/dns_check.py)."""
+    data = request.get_json(silent=True) or {}
+    d = _norm_dns({'mode': 'set', 'plain': data.get('plain') or [], 'doh': data.get('doh') or ''})
+    raw_doh = (data.get('doh') or '').strip() if isinstance(data.get('doh'), str) else ''
+    if raw_doh and not d['doh']:
+        return jsonify({'error': 'Адрес зашифрованного DNS должен начинаться с https://, h3:// или quic://'}), 400
+    if not d['plain'] and not d['doh']:
+        return jsonify({'error': 'Сначала введите адрес DNS'}), 400
+    from modules import dns_check
+    return jsonify({'results': dns_check.check(d['plain'], d['doh'])})
+
 @app.route('/api/xray/clients/<client_uuid>/dns', methods=['POST'])
 @login_required
 def xray_set_dns(client_uuid):
