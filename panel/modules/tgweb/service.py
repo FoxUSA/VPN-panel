@@ -25,6 +25,8 @@ import tempfile
 import time
 import urllib.request
 
+from modules import proto_limits
+
 from . import (ACCESS_LOG, BIN_PATH, CONFIG_DIR, CONFIG_FILE, DATA_DIR, DEPS, GITHUB_REPO,
                UNIT_FILE, UNIT_NAME, audit, load_clients, load_settings, run_cmd, save_settings)
 from . import nginx, xray_link
@@ -110,9 +112,14 @@ def latest_version_nowait():
     return _LATEST['value']
 
 
+def update_state():
+    """Решение манифеста: что можно ставить этой панели (см. proto_limits)."""
+    return proto_limits.decide('tgweb', installed_version(), latest_version_nowait())
+
+
 def update_available():
-    cur, last = installed_version(), latest_version_nowait()
-    return bool(cur and last and _ver_tuple(last) > _ver_tuple(cur))
+    cur, target = installed_version(), update_state()['target']
+    return bool(cur and target and _ver_tuple(target) > _ver_tuple(cur))
 
 
 def _arch():
@@ -129,7 +136,7 @@ def download_binary(dest, version=''):
     arch = _arch()
     if not arch:
         return False, 'архитектура сервера не поддерживается telemt (нужна x86_64 или aarch64)'
-    version = version or latest_version(force=True)
+    version = version or proto_limits.pick('tgweb', latest_version(force=True))
     if not version:
         return False, 'не удалось узнать версию telemt на GitHub'
     name = 'telemt-%s-linux-musl.tar.gz' % arch
@@ -1103,7 +1110,9 @@ def update_binary():
     """Безопасное обновление: скачать → пробный запуск рядом → замена → рестарт →
     проверка через 443; не поднялось — откат на прежний бинарь. (ok, сообщение)."""
     was = installed_version()
-    latest = latest_version(force=True)
+    latest, hold = proto_limits.update_target('tgweb', was, latest_version(force=True))
+    if hold:
+        return False, hold
     if latest and was and _ver_tuple(latest) <= _ver_tuple(was):
         return True, 'уже последняя версия (%s)' % was
     tmp_bin = BIN_PATH + '.new'

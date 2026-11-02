@@ -10,6 +10,8 @@ import re
 import time
 import urllib.request
 
+from modules import proto_limits
+
 from . import (ACCESS_LOG, AUTH_SCRIPT, BIN_PATH, CERT_FILE, CONFIG_FILE, DATA_DIR, DEPS,
                GITHUB_REPO, KEY_FILE, STATS_ADDR, UNIT_FILE, UNIT_NAME,
                audit, load_settings, run_cmd, save_settings)
@@ -85,10 +87,16 @@ def _arch_suffix():
     return {'x86_64': 'amd64', 'aarch64': 'arm64', 'armv7l': 'arm'}.get(out.strip(), 'amd64')
 
 
-def install_binary():
-    """Качает релизный бинарь с GitHub. Возвращает (ok, сообщение)."""
-    url = 'https://github.com/%s/releases/latest/download/hysteria-linux-%s' % (
-        GITHUB_REPO, _arch_suffix())
+def install_binary(version=''):
+    """Качает релизный бинарь с GitHub: указанную версию, а без неё — потолок из
+    манифеста. Возвращает (ok, сообщение)."""
+    version = version or proto_limits.pick('hysteria', latest_version())
+    if version:
+        url = 'https://github.com/%s/releases/download/app/%s/hysteria-linux-%s' % (
+            GITHUB_REPO, version, _arch_suffix())
+    else:
+        url = 'https://github.com/%s/releases/latest/download/hysteria-linux-%s' % (
+            GITHUB_REPO, _arch_suffix())
     try:
         data = _http_get(url, timeout=180)
     except Exception as e:
@@ -115,14 +123,17 @@ def install_binary():
 
 
 def update_binary():
-    """Обновление до последнего релиза с откатом. (ok, сообщение).
+    """Обновление с откатом до последнего релиза, но не выше потолка из манифеста.
+    (ok, сообщение).
 
     Прежний бинарь сохраняем рядом: если новая версия не стартует с нашим
     конфигом, сервис останется лежать, а вернуть его будет нечем.
     """
     was = installed_version()
     was_active = not stopped_by_hand()
-    latest = latest_version(force=True)
+    latest, hold = proto_limits.update_target('hysteria', was, latest_version(force=True))
+    if hold:
+        return False, hold
     if latest and was and latest == was:
         return True, 'уже последняя версия (%s)' % was
     backup = '%s.prev' % BIN_PATH
@@ -132,7 +143,7 @@ def update_binary():
             shutil.copy2(BIN_PATH, backup)
         except Exception:
             backup = ''
-    ok, msg = install_binary()
+    ok, msg = install_binary(latest)
     if not ok:
         return False, msg
     # Остановленный руками сервис обновление не запускает: проверяем только,

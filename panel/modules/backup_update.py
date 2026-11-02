@@ -161,15 +161,8 @@ def update_check():
     авто-обновления (всё, кроме удалённых версий, берётся из server.json).
     «Доступно» = remote строго новее local; период/свитч управляют только авто-режимом,
     кнопкой обновить можно всегда.
-    ?touch=1 — ручная проверка: штампуем last_check всем трём (пассивная проверка
-    при загрузке панели дату не трогает)."""
-    if request.args.get('touch') == '1':
-        now = int(time.time())
-        SERVER_CFG['panel_last_check'] = now
-        SERVER_CFG['geo_last_check'] = now
-        SERVER_CFG['bm7_last_check'] = now
-        _save_server_config(SERVER_CFG)
-        audit('info', 'Ручная проверка обновлений')
+    ?touch=1 — ручная проверка всего, ?touch=panel|geo|bm7 — одного блока: штампуем
+    last_check (пассивная проверка при загрузке панели дату не трогает)."""
     # Панель
     m = _fetch_manifest() or {}
     remote_v = str(m.get('version') or '')
@@ -185,6 +178,16 @@ def update_check():
     remote_bm7 = _fetch_remote_bm7_date()
     local_bm7 = _bm7_local_version()
     bm7_avail = bool(remote_bm7) and _bm7_date_tuple(remote_bm7) > _bm7_date_tuple(local_bm7)
+    # Дата проверки — только если сервер обновлений ответил: иначе карточка говорила
+    # бы «проверено только что», хотя узнать ничего не удалось.
+    touch = request.args.get('touch') or ''
+    if touch:
+        now = int(time.time())
+        for kind, remote in (('panel', remote_v), ('geo', remote_geo), ('bm7', remote_bm7)):
+            if remote and touch in ('1', kind):
+                SERVER_CFG[kind + '_last_check'] = now
+        _save_server_config(SERVER_CFG)
+        audit('info', 'Ручная проверка обновлений')
 
     def _i(key, default):
         try: return max(1, int(SERVER_CFG.get(key) or default))
@@ -425,12 +428,24 @@ def update_apply_bm7():
     try:
         SERVER_CFG['bm7_last_check'] = int(time.time()); _save_server_config(SERVER_CFG)
         try:
-            _bm7_sync_once()
+            summary = _bm7_sync_once()
         except Exception as e:
             return jsonify({'ok': False, 'error': str(e)}), 500
-        return jsonify({'ok': True, 'new_version': _bm7_local_version()})
+        return jsonify({'ok': True, 'new_version': _bm7_local_version(),
+                        'message': _bm7_summary_text(summary) if isinstance(summary, dict) else ''})
     finally:
         _UPDATE_LOCK.release()
+
+
+def _bm7_summary_text(s):
+    """Итог «Обновить шаблоны» одной фразой; имена новых — если их немного."""
+    total = 'Всего %d blackmatrix7 и %d своих.' % (s['bm7'], s['own'])
+    if not s['added'] and not s['removed']:
+        return 'Шаблоны проверены, изменений нет. ' + total
+    names = ''
+    if s['added']:
+        names = ' (%s%s)' % (', '.join(s['added'][:5]), ', …' if len(s['added']) > 5 else '')
+    return 'Шаблоны обновлены: новых %d%s, убрано %d. %s' % (len(s['added']), names, len(s['removed']), total)
 
 @bp.route('/api/update/apply-all', methods=['POST'])
 @_auth

@@ -314,12 +314,18 @@
 
     var list = document.getElementById('hyList');
     if (!list) return;
+    // Перетаскивание карточек (app.js): пока карточку держат, список не
+    // перерисовываем — он обновится сразу после отпускания.
+    if (typeof _clientDragDefer === 'function' && _clientDragDefer('hy', render)) return;
+    var ordered = typeof _clientOrderSort === 'function'
+      ? _clientOrderSort('hy', state.clients, function (c) { return String(c.id); })
+      : state.clients;
     var cards = globalCard();
-    if (!state.clients.length) {
+    if (!ordered.length) {
       cards += '<div class="empty-state"><div class="icon">&#9881;</div>' +
                '<p>Клиентов пока нет. Создайте первого, чтобы начать.</p></div>';
     } else {
-      cards += state.clients.map(clientCard).join('');
+      cards += ordered.map(clientCard).join('');
     }
     list.innerHTML = cards;
     refreshCollapseAllBtn();
@@ -693,7 +699,8 @@
       ? ' &middot; limit: ' + c.limit_gb + ' GB' + (c.disabled_by_limit ? ' (исчерпан)' : '')
       : '';
     return '' +
-      '<div class="peer-card' + (collapsed ? ' collapsed' : '') + '" data-id="' + esc(id) + '">' +
+      '<div class="peer-card' + (collapsed ? ' collapsed' : '') + '" data-id="' + esc(id) +
+        '" data-ckey="' + esc(id) + '">' +
         '<div class="peer-top">' +
           '<div class="peer-name">' +
             '<div class="peer-name-row">' +

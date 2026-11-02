@@ -23,6 +23,8 @@ import uuid as uuid_lib
 
 from flask import Blueprint, jsonify, request
 
+from modules import proto_limits
+
 bp = Blueprint('mtg', __name__)
 
 # === Зависимости от app.py ==================================================
@@ -277,11 +279,14 @@ def _install_mtg():
         if not port:
             return False, f'не нашлось свободного порта под mtg ({busy})'
     if not os.path.exists(MTG_BIN):
+        # Потолок из манифеста: без записи там берём последний релиз, как раньше.
+        pinned = proto_limits.pick('mtg')
         cmd = (
             'set -e\n'
             'cd /tmp\n'
-            'LATEST=$(curl -sI https://github.com/9seconds/mtg/releases/latest '
-            '| grep -i ^location | grep -oP "v[\\d.]+" | tr -d "\\r")\n'
+            + (f'LATEST={pinned}\n' if pinned else
+               'LATEST=$(curl -sI https://github.com/9seconds/mtg/releases/latest '
+               '| grep -i ^location | grep -oP "v[\\d.]+" | tr -d "\\r")\n') +
             'test -n "$LATEST"\n'
             'ARCH=$(uname -m); case "$ARCH" in x86_64) A=amd64;; aarch64) A=arm64;; *) A=amd64;; esac\n'
             'curl -sL "https://github.com/9seconds/mtg/releases/download/${LATEST}/'

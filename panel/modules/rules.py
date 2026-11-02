@@ -550,7 +550,10 @@ def _byfox_rules_sync_once():
 
     Сами правила панель НЕ качает: с тех пор как block_ads_trackers_quic стал
     обычным rule-set'ом, их забирает клиент по URL, как у blackmatrix7.
+
+    Возвращает (было, стало) — списки папок для итога «что изменилось».
     """
+    before = list(_byfox_rules_load().get('folders') or [])
     text = _http_get_text(BYFOX_RULES_BASE + '/folders.txt', timeout=12)
     folders, seen = [], set()
     for raw in (text or '').splitlines():
@@ -560,12 +563,13 @@ def _byfox_rules_sync_once():
         seen.add(s)
         folders.append(s)
     if not folders:
-        return
+        return before, before
     _byfox_rules_save({'folders': folders, 'fetched': time.strftime('%Y-%m-%d %H:%M')})
     try:
         audit('info', f'Свои шаблоны правил обновлены ({len(folders)} шт)')
     except Exception:
         pass
+    return before, folders
 
 
 def _bm7_parse(text):
@@ -637,28 +641,42 @@ def _bm7_interval_days():
 def _bm7_sync_once():
     """Тянет blackmatrix7.txt и, если дата свежее (или кэша ещё нет), перезаписывает
     кэш ШАБЛОНОВ. xray_rule_lists.json НЕ трогается — там выбор пользователя.
-    Заодно (тот же период) синкает свои шаблоны с byfox.dev."""
+    Заодно (тот же период) синкает свои шаблоны с byfox.dev.
+
+    Возвращает итог для кнопки «Обновить шаблоны»: сколько всего и что
+    добавилось или ушло (blackmatrix7 и свои — вместе)."""
+    own_before = own_after = list(_byfox_rules_load().get('folders') or [])
     try:
-        _byfox_rules_sync_once()   # свои шаблоны + QUIC-кэш; период общий с bm7
+        own_before, own_after = _byfox_rules_sync_once()   # свои шаблоны; период общий с bm7
     except Exception as e:
         try: audit('warn', f'Свои шаблоны правил: {e}')
         except Exception: pass
+    cached = _bm7_load_templates()
+    bm7_before = list(cached.get('services') or [])
+    bm7_after = bm7_before
+
+    def _summary():
+        added = [s for s in bm7_after if s not in set(bm7_before)] + [s for s in own_after if s not in set(own_before)]
+        removed = [s for s in bm7_before if s not in set(bm7_after)] + [s for s in own_before if s not in set(own_after)]
+        return {'bm7': len(bm7_after), 'own': len(own_after), 'added': added, 'removed': removed}
+
     text = _http_get_text(BM7_SERVICES_URL, timeout=12)
     remote_date, services = _bm7_parse(text)
     if not services:
-        return
-    cached = _bm7_load_templates()
-    have_cache = bool(cached.get('services'))
+        return _summary()
+    have_cache = bool(bm7_before)
     newer = bool(remote_date) and _bm7_date_tuple(remote_date) > _bm7_date_tuple(_bm7_local_version())
     if not (newer or not have_cache):
-        return
+        return _summary()
     _bm7_save_templates({'date': remote_date or '', 'services': services})
+    bm7_after = services
     if remote_date:
         _bm7_write_version(remote_date)
     try:
         audit('info', f'blackmatrix7: библиотека шаблонов обновлена ({len(services)} шт, дата {remote_date or "?"})')
     except Exception:
         pass
+    return _summary()
 
 
 def _parse_clash_payload(text):
@@ -704,8 +722,21 @@ def _parse_clash_payload(text):
             ips.append(item)
         elif re.match(r'^\d+\.\d+\.\d+\.\d+$', item):
             ips.append(item + '/32')
+        elif re.match(r'^[A-Z0-9-]+,', upper):
+            # Тип, которого у XRay нет (IP-ASN, PROCESS-NAME, DOMAIN-REGEX, GEOIP…):
+            # раньше он уезжал в домены мусором вида 'domain:ip-asn,62041'.
+            continue
         else:
-            domains.append('domain:' + item.lower())
+            # Голый домен. Списки с behavior: domain (bm7 *_Domain.yaml) пишут
+            # суффикс как '+.example.com', Loon/SR-формат — как '.example.com'.
+            # XRay '+.' не понимает: такая запись не совпадала ни с чем.
+            d = item.lower()
+            for pfx in ('+.', '*.', '.'):
+                if d.startswith(pfx):
+                    d = d[len(pfx):]
+                    break
+            if d:
+                domains.append('domain:' + d)
     return {'domain': domains, 'ip': ips}
 
 
@@ -759,10 +790,16 @@ def _save_global_cache(cache):
         pass
 
 
+# Версия разборщика в ключе кеша: при правке _parse_clash_payload старый разбор,
+# закешированный в global_cache.json, пересобирается сам, без ручного сброса.
+# 2 — '+.домен' из *_Domain.yaml и отбрасывание чужих типов (IP-ASN и т.п.).
+_GLOBAL_PARSER_VER = 2
+
+
 def _entry_cache_key(entry):
     """Стабильный ключ источника правил: URL или хеш inline-rules."""
     if entry.get('url'):
-        return 'url:' + entry['url']
+        return f'url{_GLOBAL_PARSER_VER}:' + entry['url']
     if entry.get('rules'):
         h = hashlib.sha256(('\n'.join(entry['rules'])).encode('utf-8')).hexdigest()[:16]
         return 'inl:' + h

@@ -182,6 +182,53 @@ def _put(src, dst):
     os.replace(tmp, dst)
 
 
+def _dat_tags(path):
+    """Коды разделов .dat-файла в верхнем регистре: каждая запись — поле 1
+    верхнего уровня protobuf, её код — первое поле записи."""
+    with open(path, 'rb') as f:
+        data = f.read()
+
+    def varint(i):
+        val = shift = 0
+        while True:
+            c = data[i]
+            i += 1
+            val |= (c & 127) << shift
+            shift += 7
+            if c < 128:
+                return val, i
+
+    tags = set()
+    i = 0
+    while i < len(data):
+        _, i = varint(i)
+        size, i = varint(i)
+        _, j = varint(i)
+        n, j = varint(j)
+        tags.add(data[j:j + n].decode('ascii', 'replace').upper())
+        i += size
+    return tags
+
+
+def _keep_installed_geoip(rel):
+    """С v26.10.21 в релизе урезанный geoip.dat: из стран только RU, CN и IR.
+    Правила по странам у XRay и Hysteria (geoip:tr и т.п.) с ним не запустятся,
+    причём Hysteria — при следующем рестарте, проверка ниже её не видит. Если
+    новая база теряет коды, кладём установленную поверх релизной: и проверка, и
+    установка идут уже с ней. Возвращает число сохранённых кодов."""
+    cur, new = os.path.join(ASSET_DIR, 'geoip.dat'), os.path.join(rel, 'geoip.dat')
+    if not (os.path.isfile(cur) and os.path.isfile(new)):
+        return 0
+    try:
+        lost = _dat_tags(cur) - _dat_tags(new)
+    except Exception as e:
+        _audit('warn', 'не удалось сравнить geoip.dat: %s' % e)
+        return 0
+    if lost:
+        shutil.copy2(cur, new)
+    return len(lost)
+
+
 def safe_update(tag):
     """(ok, сообщение). tag — 'v26.10.10'."""
     xray_bin = _D.get('xray_bin') or '/usr/local/bin/xray'
@@ -223,6 +270,10 @@ def safe_update(tag):
         p = subprocess.run([new_bin, 'version'], capture_output=True, text=True, timeout=15)
         if p.returncode != 0:
             return False, 'новый бинарь не запускается на этом сервере: %s' % _tail(p.stderr, 3)
+
+        kept = _keep_installed_geoip(rel)
+        if kept:
+            _audit('info', 'geoip.dat оставлен прежний: в релизе %s нет %d кодов' % (tag, kept))
 
         # 2. проверить живой конфиг на новом ядре
         try:

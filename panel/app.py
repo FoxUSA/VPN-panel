@@ -210,6 +210,9 @@ DEFAULT_SERVER_CONFIG = {
     # Порядок вкладок, перетаскиваемых мышью: {'main': [id вкладок], 'tg': ['mtg', 'web']}.
     # Пустой = порядок из разметки.
     'tab_order': {},
+    # Порядок карточек клиентов, перетаскиваемых мышью: {'xray': [uuid], 'awg':
+    # [public_key], 'hy': [id]}. Клиенты не из списка (новые) встают в конец.
+    'client_order': {},
     # === Обновления (раньше жили в manifest.json — переехали сюда, чтобы
     # обновление кода их не затирало). Свитчи авто-обновления по умолчанию ВКЛ:
     # применяется без запроса, пишется в журнал. last_check — epoch-секунды
@@ -2144,7 +2147,7 @@ def server_config_get():
 @login_required
 def server_config_set():
     body = request.get_json(force=True) or {}
-    allowed_keys = {'enabled_protocols', 'enabled_platforms', 'mtg_fake_host', 'sni', 'server_name', 'profile_naming', 'fake_enabled', 'login_path', 'login_block_root', 'settings_favorites', 'server_ip_override', 'tab_order',
+    allowed_keys = {'enabled_protocols', 'enabled_platforms', 'mtg_fake_host', 'sni', 'server_name', 'profile_naming', 'fake_enabled', 'login_path', 'login_block_root', 'settings_favorites', 'server_ip_override', 'tab_order', 'client_order',
                     'panel_check_interval_days', 'panel_auto_update',
                     'geo_check_interval_days', 'geo_auto_update',
                     'bm7_check_interval_days', 'bm7_auto_update'}
@@ -2189,6 +2192,16 @@ def server_config_set():
                 for g, ids in v.items()
                 if isinstance(g, str) and re.fullmatch(r'[a-z0-9_]{1,20}', g) and isinstance(ids, list)
             }
+        if k == 'client_order':
+            # Та же форма, что у tab_order, но ключи длиннее: uuid XRay, base64
+            # публичного ключа AWG (+ / =), id клиента Hysteria.
+            if not isinstance(v, dict):
+                return jsonify({'ok': False, 'error': 'client_order must be an object'}), 400
+            v = {
+                g: [x for x in ids if isinstance(x, str) and re.fullmatch(r'[A-Za-z0-9_+/=.:-]{1,64}', x)][:2000]
+                for g, ids in v.items()
+                if isinstance(g, str) and re.fullmatch(r'[a-z0-9_]{1,20}', g) and isinstance(ids, list)
+            }
         if k == 'server_ip_override':
             v = (v or '').strip()
             # IP может не совпадать ни с одним локальным интерфейсом: в облаках с NAT
@@ -2204,7 +2217,8 @@ def server_config_set():
     for k in sensitive:
         if k in changes:
             audit('warn', f'Server config [{k}] → {changes[k]!r} (from {ip})')
-    rest = {k: v for k, v in changes.items() if k not in sensitive}
+    # client_order — перетаскивание карточек: строка из сотни uuid в журнале — шум.
+    rest = {k: v for k, v in changes.items() if k not in sensitive and k != 'client_order'}
     if rest:
         summary = ', '.join(f'{k}={v}' for k, v in rest.items())
         audit('info', f'Server config: {summary}')
@@ -7400,7 +7414,7 @@ def _install_xray():
         # prerelease всё подряд — новый сервер получал ядро полугодовой давности
         # (v26.3.27 на 10.2026), без нынешних XDNS и adu для Hysteria. Ставим
         # тот же тег, что кнопка «Обновить» (см. system_update_proto).
-        target = _github_latest_tag('XTLS/Xray-core')
+        target = proto_limits.pick('xray', _github_latest_tag('XTLS/Xray-core'))
         ver_arg = f' --version {target}' if re.match(r'^v?[\w.-]+$', target or '') else ''
         cmd = ('bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/'
                f'install-release.sh)" @ install{ver_arg}')
@@ -9721,6 +9735,16 @@ def _semver_lt(a, b):
         return False
     return pa[:3] < pb[:3]
 
+def _proto_limit_fields(proto, cur, latest):
+    """Поля блока версий с учётом потолка из манифеста: has_update — есть что
+    ставить этой панели, а не «на GitHub есть новее»."""
+    d = proto_limits.decide(proto, cur, latest)
+    return {
+        'target': d['target'], 'hold': d['hold'], 'need_panel': d['need_panel'], 'hold_text': d['text'],
+        'has_update': _semver_lt(cur, d['target']),
+    }
+
+
 def _hysteria_versions_blob():
     """Блок версий Hysteria для /api/system/versions ({} если пакета нет)."""
     try:
@@ -9732,7 +9756,7 @@ def _hysteria_versions_blob():
             'installable': True,   # ставит сама панель: бинарь с GitHub + свой юнит
             'current': cur, 'latest': latest,
             'latest_source': 'GitHub',
-            'has_update': _semver_lt(cur, latest),
+            **_proto_limit_fields('hysteria', cur, latest),
             'updatable': True,
         }}
     except Exception:
@@ -9754,7 +9778,7 @@ def _tgweb_versions_blob():
             'installable': True,   # ставит сама панель: telemt + nginx + обвязка XRay
             'current': cur, 'latest': latest,
             'latest_source': 'GitHub',
-            'has_update': _semver_lt(cur, latest),
+            **_proto_limit_fields('tgweb', cur, latest),
             'updatable': True,
         }}
     except Exception:
@@ -9788,22 +9812,26 @@ def _proto_update_item(proto):
         return None
     if not cur or not latest:
         return None
-    upd = _semver_lt(cur, latest)
+    # Версия выше потолка из манифеста — не повод для ⚠: сделать тут пока нечего.
+    limit = proto_limits.decide(proto, cur, latest)
+    target = limit['target']
+    upd = _semver_lt(cur, target)
     item = {
         'id': dep_id, 'level': 'warn', 'name': 'Движок %s последней версии' % title,
         'ok': not upd, 'fixable': upd, 'fix_internal': 'proto_update', 'fix_cmd': '',
         'update_proto': proto, 'long': True, 'eta_hint': 'Скачивание и замена бинаря — обычно до минуты',
-        'description': ('Установлена %s — последняя.' % cur) if not upd
-                       else ('Установлена %s, вышла %s. %s' % (cur, latest, how)),
+        'description': (limit['text'] or ('Установлена %s — последняя.' % cur)) if not upd
+                       else ('Установлена %s, вышла %s. %s' % (cur, target, how)),
     }
     if upd:
-        item.update({'ui': 'update', 'ui_label': 'Обновить до %s' % latest})
+        item.update({'ui': 'update', 'ui_label': 'Обновить до %s' % target})
     return item
 
 
 @app.route('/api/system/versions', methods=['GET'])
 @login_required
 def system_versions():
+    proto_limits.refresh()
     awg = _find_awg_paths()
     xray = _find_xray_paths()
     mtg = _find_mtg_paths()
@@ -9825,6 +9853,8 @@ def system_versions():
             'current': awg_cur, 'latest': awg_latest,
             'latest_source': 'PPA',  # версия берётся из apt-cache policy amneziawg-dkms, а не с GitHub
             'installable': bool(awg_install),
+            **_proto_limit_fields('awg', awg_cur, awg_latest),
+            # Потолок awg_install учёл сам, в detect(): обновление идёт через него.
             'has_update': (awg_vi.get('has_update') if awg_vi
                            else _semver_lt(awg_cur, awg_latest)),
             # Версия загруженного в ядро модуля — справочно: это внутренняя метка
@@ -9840,7 +9870,7 @@ def system_versions():
             'installable': True,   # ставится панелью официальным установщиком
             'current': xray_cur, 'latest': xray_latest,
             'latest_source': 'GitHub',
-            'has_update': _semver_lt(xray_cur, xray_latest),
+            **_proto_limit_fields('xray', xray_cur, xray_latest),
             'updatable': True,
         },
         'mtg': {
@@ -9848,7 +9878,7 @@ def system_versions():
             'installable': True,   # ставится панелью официальным установщиком
             'current': mtg_cur, 'latest': mtg_latest,
             'latest_source': 'GitHub',
-            'has_update': _semver_lt(mtg_cur, mtg_latest),
+            **_proto_limit_fields('mtg', mtg_cur, mtg_latest),
             'updatable': True,
         },
         # Hysteria спрашиваем у её пакета: версии и релизы знает он сам.
@@ -10069,6 +10099,10 @@ def _proto_update_start(proto, job_id=None):
         # не shell-строкой, как у xray/mtg, а сценарием модуля.
         if not awg_install:
             return {'ok': False, 'error': 'модуль awg_install.py не загружен'}
+        proto_limits.refresh(force=True)
+        hold = awg_install.detect()['update_hold']
+        if hold:
+            return {'ok': False, 'hold': True, 'error': hold}
         return _dep_fix_job_start(job_id, awg_install.update,
                                   steps=awg_install.UPDATE_STEPS)
     if proto == 'xray':
@@ -10077,7 +10111,11 @@ def _proto_update_start(proto, job_id=None):
         # не делала бы ничего. Ставим ровно тот тег, который панель показала в
         # блоке версий (он же из кеша, лишнего запроса нет). Префикс 'v' скрипту
         # безразличен — он нормализует сам; с --version в GitHub API не ходит.
-        target = _github_latest_tag('XTLS/Xray-core')
+        # Потолок из манифеста важнее: выше него эта панель ядро не проверяла.
+        target, hold = proto_limits.update_target('xray', _get_xray_version(),
+                                                  _github_latest_tag('XTLS/Xray-core'))
+        if hold:
+            return {'ok': False, 'hold': True, 'error': hold}
         if xray_core_update and re.match(r'^v?[\w.-]+$', target or ''):
             # Проверка нового ядра на живом конфиге ДО установки + откат —
             # см. modules/xray_core_update.py. Установщик ниже — только запасной
@@ -10092,11 +10130,14 @@ def _proto_update_start(proto, job_id=None):
         cmd = ('bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)"'
                f' @ install{ver_arg}')
     elif proto == 'mtg':
+        target, hold = proto_limits.update_target('mtg', _get_mtg_version(),
+                                                  _github_latest_tag('9seconds/mtg'))
+        if hold:
+            return {'ok': False, 'hold': True, 'error': hold}
         cmd = (
             'set -e\n'
             'cd /tmp\n'
-            'LATEST=$(curl -sI https://github.com/9seconds/mtg/releases/latest | grep -i ^location | grep -oP "v[\\d.]+" | tr -d "\\r")\n'
-            'test -n "$LATEST"\n'
+            f'LATEST={target}\n'
             'curl -sL "https://github.com/9seconds/mtg/releases/download/${LATEST}/mtg-${LATEST#v}-linux-amd64.tar.gz" -o mtg.tar.gz\n'
             'tar xzf mtg.tar.gz\n'
             'install -m 0755 mtg-*-linux-amd64/mtg /usr/local/bin/mtg\n'
@@ -10109,6 +10150,11 @@ def _proto_update_start(proto, job_id=None):
             from modules.hysteria import service as hy_service
         except Exception as e:
             return {'ok': False, 'error': f'протокол Hysteria не подключён: {e}'}
+        # Отказ манифеста — ответом на нажатие, а не ошибкой фоновой задачи.
+        _, hold = proto_limits.update_target('hysteria', hy_service.installed_version(),
+                                             hy_service.latest_version())
+        if hold:
+            return {'ok': False, 'hold': True, 'error': hold}
 
         def _hy_update_job():
             ok, msg = hy_service.update_binary()
@@ -10127,6 +10173,10 @@ def _proto_update_start(proto, job_id=None):
             from modules.tgweb import service as tg_service
         except Exception as e:
             return {'ok': False, 'error': f'Telegram WEB не подключён: {e}'}
+        _, hold = proto_limits.update_target('tgweb', tg_service.installed_version(),
+                                             tg_service.latest_version())
+        if hold:
+            return {'ok': False, 'hold': True, 'error': hold}
 
         def _tg_update_job():
             try:
@@ -10773,6 +10823,14 @@ except Exception as _xcu_err:
     print(f'[xray-update] отключён: {_xcu_err}', flush=True)
 
 
+from modules import proto_limits
+proto_limits.init({
+    'panel_version': PANEL_VERSION,
+    'read_local': _local_manifest,
+    'fetch_remote': lambda: json.loads(_http_get_text(UPDATE_BASE_URL.rstrip('/') + '/manifest.json')),
+})
+
+
 def _xdns_boot_heal():
     """XDNS, включённый прежней версией панели, — без шифрования VLESS, и
     клиенты на Xray ≥ 26.9 его профиль не запускают. Переводим вход на
@@ -11381,6 +11439,8 @@ profiles_mod.init({
     'SERVER_CFG': SERVER_CFG,
     'XRAY_PARAMS': XRAY_PARAMS,
     'XRAY_RULE_UPDATE_INTERVAL': XRAY_RULE_UPDATE_INTERVAL,
+    'XRAY_GEOIP_MMDB_URL': XRAY_GEOIP_MMDB_URL,
+    'XRAY_GEOIP_ASN_MMDB_URL': XRAY_GEOIP_ASN_MMDB_URL,
 })
 app.register_blueprint(profiles_mod.bp)
 

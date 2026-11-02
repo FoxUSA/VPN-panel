@@ -20,6 +20,8 @@ import os
 import re
 import subprocess
 
+from modules import proto_limits
+
 _D = {}
 
 
@@ -148,6 +150,16 @@ def detect():
         st['update_available'] = False
     st['candidate_ver'] = _norm_ver(st['apt_candidate'])
     st['installed_ver'] = _norm_ver(st['apt_installed'] or st['module_version'])
+    # Кандидат выше потолка из манифеста: apt поставит только его, другую версию
+    # не выбрать, поэтому обновление просто ждёт. Отсюда это видят все: блок версий,
+    # пункт «Зависимостей» и сам update().
+    st['update_hold'] = ''
+    if st['update_available']:
+        fmt = lambda v: (f'v{v[0]}.{v[1]}.{v[2]}' if v else '')
+        limit = proto_limits.decide('awg', fmt(_norm_ver(st['apt_installed'])), fmt(st['candidate_ver']))
+        if limit['hold']:
+            st['update_available'] = False
+            st['update_hold'] = limit['text']
     st['installed'] = st['bin_ok'] and st['module_built']
     return st
 
@@ -364,11 +376,15 @@ def update(progress):
         progress(0, 'fail', 'модуль не установлен')
         return False, 'AmneziaWG не установлен — обновлять нечего'
     _sh('apt-get update >/dev/null 2>&1', timeout=300)
+    proto_limits.refresh(force=True)
     st = detect()
     if not st['repo_ok']:
         progress(0, 'fail', 'пакета нет в apt')
         return False, ('пакет amneziawg-dkms не виден apt — обновление возможно только из '
                        'исходников, см. инструкцию в блоке версий протокола')
+    if st['update_hold']:
+        progress(0, 'fail', st['update_hold'])
+        return False, st['update_hold']
     if not st['update_available']:
         progress(0, 'ok', f'уже актуальная версия {st["module_version"]}')
         return True, f'Обновление не требуется: установлена версия {st["module_version"]}'

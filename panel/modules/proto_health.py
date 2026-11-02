@@ -735,17 +735,18 @@ def tgweb_items():
         })
     try:
         upd = svc.update_available()
+        limit = svc.update_state()
     except Exception:
-        upd = False
+        upd, limit = False, {'target': '', 'text': ''}
     items.append({
         'id': 'tgweb_update', 'level': 'warn', 'name': 'Движок telemt последней версии',
         'ok': not upd, 'fixable': upd, 'fix_internal': 'ph_tgweb_update', 'fix_cmd': '',
         'long': True, 'eta_hint': 'Скачивание, пробный запуск рядом с рабочим, замена — 20–60 сек',
-        'description': ('Установлена %s — последняя.' % (svc.installed_version() or '?')) if not upd else
+        'description': (limit['text'] or ('Установлена %s — последняя.' % (svc.installed_version() or '?'))) if not upd else
                        ('Установлена %s, вышла %s. Обновление проверит новую версию пробным запуском рядом с '
                         'рабочей и откатится само, если она не заработает.'
-                        % (svc.installed_version() or '?', svc.latest_version_nowait())),
-        **({'ui': 'update', 'ui_label': 'Обновить до %s' % svc.latest_version_nowait()} if upd else {}),
+                        % (svc.installed_version() or '?', limit['target'])),
+        **({'ui': 'update', 'ui_label': 'Обновить до %s' % limit['target']} if upd else {}),
     })
     items.append({
         'id': 'tgweb_clients_tip', 'level': 'tip', 'name': 'Какие клиенты Telegram это умеют',

@@ -68,6 +68,8 @@ PANEL_NGINX_LINK = ''
 PANEL_NGINX_SITE = ''
 PROFILE_TOKEN_URL_LEN = 0
 XRAY_RULE_UPDATE_INTERVAL = 0
+XRAY_GEOIP_MMDB_URL = ''
+XRAY_GEOIP_ASN_MMDB_URL = ''
 
 REQUIRED_DEPS = [
     'PANEL_NGINX_LINK',
@@ -76,6 +78,8 @@ REQUIRED_DEPS = [
     'SERVER_CFG',
     'XRAY_PARAMS',
     'XRAY_RULE_UPDATE_INTERVAL',
+    'XRAY_GEOIP_MMDB_URL',
+    'XRAY_GEOIP_ASN_MMDB_URL',
     '_apply_panel_access_port',
     '_client_ip',
     '_client_rule_policy_overrides',
@@ -616,6 +620,17 @@ def _hy_profile_node(client, kind, proxy_name):
     return empty
 
 
+
+def _is_domain_set_url(url):
+    """Список из одних доменов (blackmatrix7 `<Имя>_Domain.yaml|.list|.txt`).
+
+    Такой файл подключается не как обычный набор правил: у Clash —
+    `behavior: domain` (строки вида `+.example.com`; при `classical` движок
+    отвергает их все, и список молча пустеет), у Shadowrocket — `DOMAIN-SET`
+    вместо `RULE-SET`. Так велит README самого bm7."""
+    return bool(re.search(r'_Domain\.(?:yaml|list|txt)(?:[?#].*)?$', url or ''))
+
+
 def build_shadowrocket_profile(client, proxy_line=None, update_url_override=None):
     """
     Shadowrocket .conf. RULE-SET с force-remote-dns, поддерживает update-url
@@ -688,8 +703,9 @@ def build_shadowrocket_profile(client, proxy_line=None, update_url_override=None
     # порядке каталога — он и есть приоритет.
     for r in selected:
         if r.get('url'):
+            kind = 'DOMAIN-SET' if _is_domain_set_url(r['url']) else 'RULE-SET'
             rules += (
-                f"RULE-SET,{r['url']},{_entry_policy(r, group_name)},"
+                f"{kind},{r['url']},{_entry_policy(r, group_name)},"
                 f"force-remote-dns,update-interval={XRAY_RULE_UPDATE_INTERVAL}\n"
             )
         elif r.get('rules'):
@@ -731,7 +747,8 @@ def build_clash_profile(client, proxy_lines=None):
 
     Format:
       proxies: — single VLESS entry
-      rule-providers: — remote .yaml lists with behavior=classical, format=yaml
+      rule-providers: — remote .yaml lists, format=yaml, behavior=classical
+                        (у списков из одних доменов, *_Domain, — domain)
       rules: — RULE-SET refs + inline DOMAIN-SUFFIX/IP-CIDR + GEOIP/MATCH
 
     Modes (same logic as other platforms):
@@ -756,6 +773,13 @@ def build_clash_profile(client, proxy_lines=None):
     out.append("log-level: info")
     out.append("ipv6: false")
     out.append("allow-lan: false")
+    # Базы для GEOIP и IP-ASN (последние есть в списках bm7, например Telegram и
+    # OpenAI) — с нашего зеркала. По умолчанию mihomo тянет их с GitHub, а
+    # оттуда из РФ скачивание бывает закрыто: IP-правила тогда молча не
+    # работают, остаются только доменные. Формат MaxMind mihomo читает как есть.
+    out.append("geox-url:")
+    out.append(f'  mmdb: "{XRAY_GEOIP_MMDB_URL}"')
+    out.append(f'  asn: "{XRAY_GEOIP_ASN_MMDB_URL}"')
     out.append("")
     # DNS-блок — из per-client настройки (_render_dns_clash). off → dns: {enable:false}.
     out.extend(_render_dns_clash(client))
@@ -819,7 +843,7 @@ def build_clash_profile(client, proxy_lines=None):
             slug = _slug(r.get('id'))
             out.append(f"  {slug}:")
             out.append(f"    type: http")
-            out.append(f"    behavior: classical")
+            out.append(f"    behavior: {'domain' if _is_domain_set_url(r['url']) else 'classical'}")
             out.append(f"    format: yaml")
             out.append(f'    url: "{r["url"]}"')
             out.append(f"    path: ./ruleset/{slug}.yaml")
@@ -889,13 +913,16 @@ def build_loon_profile(client, proxy_line=None):
     # В режиме 'lists' — все выбранные правила; в остальных только Block/Direct.
     selected = _selected_for_mode(_client_selected_for('loon', client), geo_mode)
 
-    # geoip-url/ipasn-url убраны: правила по странам идут нашими rule-set'ами
-    # ([Remote Rule], CIDR из countries.zip), Loon ничего сам качать не должен.
+    # geoip-url не нужен: правила по странам идут нашими rule-set'ами
+    # ([Remote Rule], CIDR из countries.zip). А ipasn-url нужен: в списках bm7
+    # (Telegram, OpenAI и др.) есть IP-ASN, и базу для них Loon должен качать
+    # с нашего зеркала, а не с GitHub, который из РФ бывает закрыт.
     # DNS больше не хардкодим: строку(и) даёт per-client настройка (_render_dns_loon).
     # mode='off' → вообще ничего не пишем, Loon оставляет свой app-level DNS/DoH.
     general = (
         "[General]\n"
         "ipv6 = false\n"
+        f"ipasn-url = {XRAY_GEOIP_ASN_MMDB_URL}\n"
     )
     general += _render_dns_loon(client)
     general += "\n"
@@ -1210,7 +1237,7 @@ def public_clash_config(token):
 
 @bp.route('/loon/<path:token>', methods=['GET'])
 def public_loon_config(token):
-    """Loon-flavored .conf (geoip-url + ipasn-url, [Remote Rule], Loon .list URLs)."""
+    """Loon-flavored .conf (ipasn-url, [Remote Rule], Loon .list URLs)."""
     target = _resolve_client(token)
     if not target:
         return ('Not found', 404, {'Content-Type': 'text/plain; charset=utf-8'})

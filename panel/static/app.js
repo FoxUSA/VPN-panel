@@ -474,6 +474,8 @@ function formatBytesShort(b) {
 
 function renderPeers(peers) {
   _lastPeers = peers;
+  if (_clientDragDefer('awg', () => renderPeers(_lastPeers))) return;
+  peers = _clientOrderSort('awg', peers, p => p.public_key);
   const list = document.getElementById('peersList');
   if (peers.length === 0) {
     list.innerHTML = '<div class="empty-state"><div class="icon">&#9881;</div><p>Клиентов пока нет. Создайте первого, чтобы начать.</p></div>';
@@ -492,7 +494,7 @@ function renderPeers(peers) {
     const pkAttr = escAttr(p.public_key);
     const nameAttr = escAttr(p.name || '');
     return `
-    <div class="peer-card${collapsed ? ' collapsed' : ''}">
+    <div class="peer-card${collapsed ? ' collapsed' : ''}" data-ckey="${pkAttr}">
       <div class="peer-top">
         <div class="peer-name">
           <div class="peer-name-row">
@@ -1139,6 +1141,12 @@ function _versionKind() {
   return currentTab;
 }
 
+// Новая версия вышла, но выше потолка из манифеста — короткая причина, почему её не ставим.
+function _versionHoldNote(v) {
+  if (!v || !v.hold) return '';
+  return v.hold === 'panel' ? 'нужна панель ' + (v.need_panel || '') : 'новая версия ещё не проверена';
+}
+
 function renderVersionBox() {
   const box = document.getElementById('versionBox');
   if (!box) return;
@@ -1164,19 +1172,27 @@ function renderVersionBox() {
   const stale = !!v.has_update;
   const curCls = stale ? 'v-stale' : 'v-up';
   const src = v.latest_source || 'GitHub';
-  const latCls = stale ? 'v-up' : 'v-latest';
+  const latCls = (stale && !v.hold) ? 'v-up' : 'v-latest';
+  const target = v.target || lat;
   // У AWG в строке стоит версия ПАКЕТА: ею управляет apt, её и сравниваем с кандидатом.
   // Версия загруженного модуля — внутренняя метка апстрима (бывает 3.1.x при пакете
   // 1.0.x), сравнивать их нельзя, поэтому она уходит в подсказку.
   const modTip = v.module_version ? ` title="модуль в ядре: ${escAttr(v.module_version)}"` : '';
   let html = `<span class="v-line"${modTip}>${escHtml(labelMap[vk])}: <span class="v-current ${curCls}">${escHtml(cur)}</span> / ${escHtml(src)}: <span class="${latCls}">${escHtml(lat)}</span></span>`;
+  if (v.hold) {
+    html += `<span class="dim" style="font-size:11.5px;margin-left:8px;" title="${escAttr(v.hold_text || '')}">${escHtml(_versionHoldNote(v))}</span>`;
+  }
   if (stale && v.silent_update) {
     // Обновляется тихо и с откатом — кнопка не нужна, период настраивается в модалке.
     html += `<span class="dim" style="font-size:11.5px;margin-left:8px;">обновится само</span>`;
   } else if (stale && v.updatable) {
-    html += `<button class="btn btn-sm btn-success btn-update" onclick="applyProtoUpdate('${vk}','${escAttr(lat)}')">Обновить</button>`;
+    // При потолке последняя версия и та, что поставится, разные: на кнопке — вторая.
+    html += `<button class="btn btn-sm btn-success btn-update" onclick="applyProtoUpdate('${vk}','${escAttr(target)}')">${v.hold ? 'Обновить до ' + escHtml(target) : 'Обновить'}</button>`;
   } else if (stale && !v.updatable) {
     html += `<button class="btn btn-sm btn-ghost btn-update" title="DKMS-модуль ядра, апдейт вручную — инструкция внутри" onclick="openAwgUpdateInstructions()">Инструкция</button>`;
+  } else if (v.hold) {
+    // Ставить пока нечего, но кнопка на месте: по нажатию человек узнает, что делать.
+    html += `<button class="btn btn-sm btn-ghost btn-update" onclick="applyProtoUpdate('${vk}','')">Обновить</button>`;
   }
   box.innerHTML = html;
 }
@@ -1358,7 +1374,23 @@ async function applyProtoInstall(proto) {
   }
 }
 
+// Манифест закрыл обновление: говорим, что делать. Нужна новая панель — ведём туда,
+// иначе ждать проверки разработчика.
+async function _protoHoldExplain(text, needPanel) {
+  if (!needPanel) {
+    await openAlert({title: 'Обновление пока закрыто', body: escHtml(text), okLabel: 'Понятно'});
+    return;
+  }
+  const go = await openConfirm({title: 'Сначала обновите панель', body: escHtml(text), okLabel: 'К обновлению панели'});
+  if (go) openServerUpdatesModal();
+}
+
 async function applyProtoUpdate(proto, latest) {
+  const vinfo = _systemVersions && _systemVersions[proto];
+  if (vinfo && vinfo.hold && !vinfo.has_update) {
+    await _protoHoldExplain(vinfo.hold_text, vinfo.need_panel);
+    return;
+  }
   const labels = {xray: 'XRay', mtg: 'mtg', awg: 'AmneziaWG', hysteria: 'Hysteria', tgweb: 'telemt'};
   const bodies = {
     xray: `Скрипт с GitHub скачает свежий бинарь XRay и перезапустит сервис. <b>VLESS-соединения оборвутся на ~2 сек.</b>\n\nКоманда:\nbash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install && systemctl restart xray\n\n⏱ Обычно 10–40 сек, до 3 мин на медленном сервере.`,
@@ -1373,7 +1405,8 @@ async function applyProtoUpdate(proto, latest) {
   };
   const ok = await openConfirm({
     title: `Обновить ${labels[proto] || proto} до ${latest}?`,
-    body: bodies[proto] || `Будет скачан свежий бинарь ${labels[proto] || proto} и перезапущен сервис.`,
+    body: ((vinfo && vinfo.hold) ? `<div style="margin-bottom:10px;">Последняя вышедшая ${escHtml(vinfo.latest || '')} ещё не проверена с этой панелью, поэтому поставится ${escHtml(latest)}.</div>` : '') +
+      (bodies[proto] || `Будет скачан свежий бинарь ${labels[proto] || proto} и перезапущен сервис.`),
     okLabel: 'Обновить',
   });
   if (!ok) return;
@@ -1384,6 +1417,14 @@ async function applyProtoUpdate(proto, latest) {
     const r = await fetch(API + '/api/system/update/' + encodeURIComponent(proto), {method: 'POST'});
     let d = await r.json();
     let ok = r.ok && d.ok;
+    // Манифест на CDN успел поменяться после загрузки страницы: это не ошибка, а отказ.
+    if (d.hold) {
+      hideBusyOverlay();
+      await loadSystemVersions(true);
+      const fresh = _systemVersions && _systemVersions[proto];
+      await _protoHoldExplain(d.error, fresh && fresh.need_panel);
+      return;
+    }
     // Обновление идёт в фоне: скачивание релиза не укладывается в 30-секундный
     // таймаут gunicorn, и синхронный ответ приходил бы HTML-страницей 502.
     if (ok && d.async) {
@@ -1765,6 +1806,7 @@ async function loadServerConfig() {
   }
   try { renderGearFavorites(); } catch (_) {}
   try { applyTabOrder(); } catch (_) {}
+  try { applyClientOrderDom(); } catch (_) {}
   return _serverConfig;
 }
 
@@ -1954,6 +1996,248 @@ async function _saveTabOrder(group) {
         if (!st || st.dragging) return;
         begin();
         if (navigator.vibrate) try { navigator.vibrate(15); } catch (_) {}
+      }, 350);
+      document.addEventListener('touchmove', blockScroll, {passive: false});
+    }
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+    document.addEventListener('pointercancel', onCancel);
+  });
+})();
+
+// ============================================================
+// Порядок клиентов: карточки перетаскиваются за шапку мышью (на телефоне —
+// долгим нажатием). Свёрнутая копия карточки едет за курсором, на её месте —
+// пунктирное окно «сюда встанет», соседи расступаются FLIP-анимацией.
+// Global rules (карточка без data-ckey) не тащится и всегда остаётся первой:
+// вставка идёт только относительно клиентских карточек, а она стоит перед ними.
+// Порядок — client_order в server.json (один на все браузеры) + копия в
+// localStorage, чтобы при входе карточки сразу стояли на месте.
+// ============================================================
+// var, не const: рендер карточек из кеша может вызваться раньше этой строки.
+var CLIENT_ORDER_KEY = 'awgPanel:clientOrder';
+// группа → id контейнера списка. Ключ карточки — data-ckey.
+var CLIENT_ORDER_GROUPS = {xray: 'xrayList', awg: 'peersList', hy: 'hyList'};
+var _clientDrag = null;              // идёт перетаскивание: перерисовка этого списка ждёт
+var _clientDragDeferred = {};      // группа → отложенная перерисовка
+
+function _clientOrderSaved() {
+  const cfg = _serverConfig && _serverConfig.client_order;
+  if (cfg && typeof cfg === 'object') return cfg;
+  try { return JSON.parse(localStorage.getItem(CLIENT_ORDER_KEY) || '{}') || {}; } catch (_) { return {}; }
+}
+
+// Копия массива клиентов в сохранённом порядке. Незнакомые (новый клиент)
+// идут в конец в исходном порядке.
+function _clientOrderSort(group, arr, keyFn) {
+  const order = _clientOrderSaved()[group];
+  if (!Array.isArray(arr) || !Array.isArray(order) || !order.length) return arr;
+  const idx = new Map(order.map((k, i) => [String(k), i]));
+  return arr
+    .map((c, i) => { const k = String(keyFn(c)); return {c, p: idx.has(k) ? idx.get(k) : order.length + i}; })
+    .sort((a, b) => a.p - b.p)
+    .map(x => x.c);
+}
+
+// Перерисовка во время перетаскивания стёрла бы карточку из-под курсора —
+// откладываем её до отпускания. true = отложено, рисовать сейчас не надо.
+function _clientDragDefer(group, fn) {
+  if (!_clientDrag || _clientDrag.group !== group) return false;
+  _clientDragDeferred[group] = fn;
+  return true;
+}
+
+function _clientCards(box) {
+  return [...box.children].filter(el => el.matches('.peer-card[data-ckey]'));
+}
+
+// Карточки, уже нарисованные из кеша до прихода server.json, — расставить по
+// сохранённому порядку без перерисовки.
+function applyClientOrderDom() {
+  if (_clientDrag) return;
+  const saved = _clientOrderSaved();
+  for (const g of Object.keys(CLIENT_ORDER_GROUPS)) {
+    const box = document.getElementById(CLIENT_ORDER_GROUPS[g]);
+    const order = saved[g];
+    if (!box || !Array.isArray(order) || !order.length) continue;
+    const cards = _clientCards(box);
+    const sorted = _clientOrderSort(g, cards, el => el.dataset.ckey);
+    if (sorted.some((el, i) => el !== cards[i])) sorted.forEach(el => box.appendChild(el));
+  }
+}
+
+async function _saveClientOrder(group) {
+  const box = document.getElementById(CLIENT_ORDER_GROUPS[group]);
+  if (!box) return;
+  const next = Object.assign({}, _clientOrderSaved());
+  next[group] = _clientCards(box).map(el => el.dataset.ckey);
+  try { localStorage.setItem(CLIENT_ORDER_KEY, JSON.stringify(next)); } catch (_) {}
+  if (_serverConfig) _serverConfig.client_order = next;
+  try {
+    const r = await fetch(API + '/api/server/config', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({client_order: next}),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!j.ok) toast(j.error || 'Порядок клиентов не сохранён');
+  } catch (_) { toast('Сеть: порядок клиентов не сохранён'); }
+}
+
+(function initClientDrag() {
+  // Шапка карточки — ручка, но не её кнопки, ссылки, поля и бейджи-кнопки.
+  const NOT_HANDLE = 'button, a, input, select, textarea, label, [onclick], [contenteditable]';
+  let st = null;  // {group, box, el, x0, y0, y, dragging, ghost, oy, timer, touch, raf, wasOpen}
+
+  function siblings() {
+    return _clientCards(st.box).filter(el => el !== st.el && el.offsetParent !== null);
+  }
+
+  // FLIP: соседи плавно переезжают на новые места, а не прыгают.
+  function moveWithFlip(mutate) {
+    const sibs = siblings();
+    const before = new Map(sibs.map(el => [el, el.getBoundingClientRect().top]));
+    mutate();
+    sibs.forEach(el => {
+      const dy = before.get(el) - el.getBoundingClientRect().top;
+      if (!dy) return;
+      el.style.transition = 'none';
+      el.style.transform = `translateY(${dy}px)`;
+      requestAnimationFrame(() => {
+        el.style.transition = 'transform .18s ease';
+        el.style.transform = '';
+        setTimeout(() => { el.style.transition = ''; }, 200);
+      });
+    });
+  }
+
+  function begin() {
+    if (!st.el.isConnected) { finish(false); return; }
+    try { window.getSelection().removeAllRanges(); } catch (_) {}
+    const r = st.el.getBoundingClientRect();
+    // Копия всегда свёрнутая: раскрытая карточка заняла бы пол-экрана.
+    const g = st.el.cloneNode(true);
+    g.querySelectorAll('[id]').forEach(n => n.removeAttribute('id'));
+    g.classList.add('collapsed', 'client-drag-ghost');
+    g.style.cssText = `position:fixed;left:${r.left}px;top:${r.top}px;width:${r.width}px;margin:0;`;
+    document.body.appendChild(g);
+    const gh = g.getBoundingClientRect().height;
+    st.ghost = g;
+    st.oy = Math.max(8, Math.min(st.y0 - r.top, gh - 8));
+    // Раскрытую карточку на время переноса сворачиваем: огромное окно на её
+    // месте мешало бы целиться. После отпускания она раскроется обратно.
+    st.wasOpen = !st.el.classList.contains('collapsed');
+    if (st.wasOpen) st.el.classList.add('collapsed');
+    st.el.classList.add('client-drag-placeholder');
+    document.body.classList.add('client-dragging');
+    st.dragging = true;
+    _clientDrag = st;
+    follow(st.y);
+    st.raf = requestAnimationFrame(autoScroll);
+  }
+
+  function follow(y) {
+    st.ghost.style.top = (y - st.oy) + 'px';
+    // Встать перед первой карточкой, чья середина ниже курсора; таких нет —
+    // в самый конец. Global rules в siblings нет, поэтому выше неё не встать.
+    const sibs = siblings();
+    let target = null;
+    for (const el of sibs) {
+      const b = el.getBoundingClientRect();
+      if (y < b.top + b.height / 2) { target = el; break; }
+    }
+    if (target) {
+      if (st.el.nextElementSibling !== target) moveWithFlip(() => st.box.insertBefore(st.el, target));
+    } else {
+      const last = sibs[sibs.length - 1];
+      if (last && last.nextElementSibling !== st.el) moveWithFlip(() => st.box.insertBefore(st.el, last.nextElementSibling));
+    }
+  }
+
+  // У края окна список сам прокручивается — иначе длинный список не перетащить.
+  function autoScroll() {
+    if (!st || !st.dragging) return;
+    const edge = 70, y = st.y, h = window.innerHeight;
+    let dy = 0;
+    if (y < edge) dy = -Math.ceil((edge - y) / 5);
+    else if (y > h - edge) dy = Math.ceil((y - (h - edge)) / 5);
+    if (dy) {
+      const was = window.scrollY;
+      window.scrollBy(0, dy);
+      if (window.scrollY !== was) follow(y);
+    }
+    st.raf = requestAnimationFrame(autoScroll);
+  }
+
+  function finish(save) {
+    const s = st;
+    st = null;
+    document.removeEventListener('pointermove', onMove);
+    document.removeEventListener('pointerup', onUp);
+    document.removeEventListener('pointercancel', onCancel);
+    document.removeEventListener('touchmove', blockScroll);
+    clearTimeout(s.timer);
+    cancelAnimationFrame(s.raf);
+    if (!s.dragging) return;
+    // Клик, который браузер шлёт сразу после отпускания, не должен нажать кнопку.
+    const swallow = e => { e.stopPropagation(); e.preventDefault(); };
+    document.addEventListener('click', swallow, true);
+    setTimeout(() => document.removeEventListener('click', swallow, true), 0);
+    document.body.classList.remove('client-dragging');
+    const r = s.el.getBoundingClientRect();
+    const g = s.ghost;
+    g.style.transition = 'left .15s ease, top .15s ease';
+    g.style.left = r.left + 'px';
+    g.style.top = r.top + 'px';
+    // Сохраняем до отложенной перерисовки: она отсортирует уже по новому порядку.
+    if (save) _saveClientOrder(s.group);
+    setTimeout(() => {
+      g.remove();
+      s.el.classList.remove('client-drag-placeholder');
+      if (s.wasOpen) s.el.classList.remove('collapsed');
+      _clientDrag = null;
+      const fn = _clientDragDeferred[s.group];
+      delete _clientDragDeferred[s.group];
+      if (fn) try { fn(); } catch (_) {}
+    }, 160);
+  }
+
+  function onMove(e) {
+    if (!st) return;
+    st.y = e.clientY;
+    if (!st.dragging) {
+      const far = Math.abs(e.clientX - st.x0) + Math.abs(e.clientY - st.y0) > 6;
+      if (st.touch) { if (far) finish(false); return; }  // палец поехал до долгого нажатия — это прокрутка
+      if (!far) return;
+      begin();
+      if (!st) return;
+    }
+    e.preventDefault();
+    follow(e.clientY);
+  }
+  function onUp() { if (st) finish(true); }
+  function onCancel() { if (st) finish(!!st.dragging); }
+  function blockScroll(e) { if (st && st.dragging) e.preventDefault(); }
+
+  document.addEventListener('pointerdown', e => {
+    if (st || _clientDrag || e.button !== 0 || !e.target.closest) return;
+    // Ручка — только левая часть шапки (имя и бейджи). Ряд кнопок справа не
+    // ручка: там курсор мигал бы между стрелкой кнопок и «рукой» в зазорах.
+    const handle = e.target.closest('.peer-top > .peer-name');
+    if (!handle || e.target.closest(NOT_HANDLE)) return;
+    const top = handle.parentNode;
+    const el = top.parentNode;
+    if (!el || !el.matches || !el.matches('.peer-card[data-ckey]')) return;
+    const box = el.parentNode;
+    const group = Object.keys(CLIENT_ORDER_GROUPS).find(g => box && box.id === CLIENT_ORDER_GROUPS[g]);
+    if (!group) return;
+    st = {group, box, el, x0: e.clientX, y0: e.clientY, y: e.clientY, dragging: false,
+          touch: e.pointerType === 'touch'};
+    if (st.touch) {
+      // На телефоне список листается пальцем — тащим по долгому нажатию.
+      st.timer = setTimeout(() => {
+        if (!st || st.dragging) return;
+        begin();
+        if (st && navigator.vibrate) try { navigator.vibrate(15); } catch (_) {}
       }, 350);
       document.addEventListener('touchmove', blockScroll, {passive: false});
     }
@@ -2470,8 +2754,8 @@ function _psvcStateCards(s) {
   if (ver && ver.installed) {
     const stale = !!ver.has_update;
     verHtml = `<span class="${stale ? 'v-stale' : 'v-up'}" style="font-size:18px;">${escHtml(ver.current || '—')}</span>` +
-      (stale ? `<div style="font-size:11.5px;color:var(--orange);margin-top:3px;">доступна ${escHtml(ver.latest || '')}</div>`
-             : `<div style="font-size:11.5px;color:var(--text3);margin-top:3px;">актуальная версия</div>`);
+      (stale ? `<div style="font-size:11.5px;color:var(--orange);margin-top:3px;">доступна ${escHtml(ver.target || ver.latest || '')}</div>`
+             : `<div style="font-size:11.5px;color:var(--text3);margin-top:3px;" title="${escAttr(ver.hold_text || '')}">${escHtml(_versionHoldNote(ver) || 'актуальная версия')}</div>`);
   }
   return `
     <div class="psvc-state">
@@ -2503,9 +2787,11 @@ function _paintProtoSvc() {
   // там открывается инструкция, а не запуск апдейта.
   let updBtn = '';
   if (canUpdate && ver.updatable) {
-    updBtn = `<button class="btn btn-sm btn-success" onclick="psvcUpdate()">Обновить до ${escHtml(ver.latest || '')}</button>`;
+    updBtn = `<button class="btn btn-sm btn-success" onclick="psvcUpdate()">Обновить до ${escHtml(ver.target || ver.latest || '')}</button>`;
   } else if (canUpdate && !ver.updatable) {
     updBtn = `<button class="btn btn-sm btn-ghost" onclick="openAwgUpdateInstructions()" title="Модуль ядра DKMS — обновление вручную по инструкции">Инструкция по обновлению</button>`;
+  } else if (ver && ver.installed && ver.hold) {
+    updBtn = `<button class="btn btn-sm btn-ghost" onclick="psvcUpdate()">Обновить</button>`;
   }
 
   const opts = a.optionsHtml ? a.optionsHtml(s) : '';
@@ -2823,7 +3109,7 @@ async function _svcActionGeneric(kind, action) {
 
 async function psvcUpdate() {
   const ver = _systemVersions && _systemVersions[_psvcKind];
-  await applyProtoUpdate(_psvcKind, (ver && ver.latest) || '');
+  await applyProtoUpdate(_psvcKind, (ver && (ver.target || ver.latest)) || '');
   await loadProtoSvc();
 }
 
@@ -3529,7 +3815,7 @@ function _xdnsChecklist(s) {
     // Кнопка есть всегда: список версий мог ещё не загрузиться — тогда он
     // подтянется по нажатию (xdnsUpdateCore).
     const upd = '<button class="btn btn-sm btn-success" data-xdns-act="core">Обновить XRay' +
-      (ver.latest ? ' до ' + escHtml(ver.latest) : '') + '</button>';
+      ((ver.target || ver.latest) ? ' до ' + escHtml(ver.target || ver.latest) : '') + '</button>';
     rows.push(_xdnsRow('bad', 'Ядро XRay ' + escHtml(s.core_version || '—') + ' — нужно ' + escHtml(s.core_min) + ' или новее',
       'Формат XDNS поменялся в ' + escHtml(s.core_min) + ', старое ядро его не разберёт. Обновление перезапустит XRay — ' +
       'клиенты переподключатся сами через пару секунд.', upd));
@@ -4023,7 +4309,7 @@ async function xdnsUpdateCore() {
     await loadSystemVersions(true);
   }
   const ver = (_systemVersions && _systemVersions.xray) || {};
-  await applyProtoUpdate('xray', ver.latest || '');
+  await applyProtoUpdate('xray', ver.target || ver.latest || '');
   await loadSystemVersions(true);
   await loadXrayXdns();
 }
@@ -4585,13 +4871,22 @@ function _suGeoDate(s) {
   return m ? `${m[3]}.${m[2]}.${m[1]}` : String(s);
 }
 
+// Ручная проверка не должна затирать несохранённые период и свитч.
+let _suKeepInputs = false;
+
 function _suBlock(prefix, cur, avail, remote, lastCheck, interval, auto) {
   document.getElementById(prefix + 'Ver').textContent = cur || '—';
+  // Пустой remote — сервер обновлений не ответил. «Актуально» тут было бы неправдой.
+  const state = !_updateInfo ? 'Проверяем…' : (remote ? 'актуально' : 'нет связи с сервером обновлений');
   document.getElementById(prefix + 'Meta').innerHTML =
     (avail
       ? `<span style="color:#9f9">Доступно обновление${remote ? ' → ' + remote : ''}</span>`
-      : `<span style="color:var(--text3)">актуально</span>`)
+      : `<span style="color:var(--text3)">${state}</span>`)
     + `<br><span style="color:var(--text3)">Последняя проверка: ${_suFmtCheck(lastCheck)}</span>`;
+  const upd = document.getElementById(prefix + 'UpdBtn');
+  upd.classList.toggle('hidden', !avail);
+  upd.textContent = remote ? 'Обновить до ' + remote : 'Обновить';
+  if (_suKeepInputs) return;
   const intEl = document.getElementById(prefix + 'Interval');
   if (document.activeElement !== intEl) intEl.value = interval;
   const sw = document.getElementById(prefix + 'Auto');
@@ -4633,14 +4928,32 @@ function _suAnyAvail() {
 async function suMainAction() {
   if (_suAnyAvail()) return applyAllUpdates();
   await suRecheck();
-  toast(_suAnyAvail() ? 'Доступно обновление — нажмите «Обновить»' : 'Обновлений нет');
+  const offline = ['panel', 'geo', 'bm7'].every(k => !_suVersions(k).remote);
+  toast(offline ? 'Нет связи с сервером обновлений'
+                : (_suAnyAvail() ? 'Доступно обновление — нажмите «Обновить»' : 'Обновлений нет'));
 }
 
-async function suRecheck() {
+// Проверка одного блока кнопкой на его карточке.
+async function suCheckOne(kind) {
+  if (_updateBusy) return;
+  const btnId = _SU_ONE[kind].prefix + 'CheckBtn';
+  _spinBtn(btnId, true);
+  const ok = await suRecheck(kind);
+  _spinBtn(btnId, false);
+  const v = _suVersions(kind);
+  if (!ok || !v.remote) toast('Нет связи с сервером обновлений');
+  else toast(_updateInfo[kind].update_available ? 'Есть обновление: ' + v.remote : 'Установлена актуальная версия');
+}
+
+// touch — что считать проверенным вручную: '1' всё, имя блока — его, '' ничего
+// (просто свежие версии перед диалогом). Возвращает, ответил ли бэкенд.
+async function suRecheck(touch = '1') {
   _suSetBusy(true);
+  let answered = false;
   try {
-    const r = await fetch(API + '/api/update/check?touch=1');  // ручная проверка → штампует «последняя проверка»
+    const r = await fetch(API + '/api/update/check' + (touch ? '?touch=' + touch : ''));
     if (r.ok) {
+      answered = true;
       _updateInfo = await r.json();
       if (_updateInfo.geo && _updateInfo.geo.remote)
         document.getElementById('brandGeoVersion').textContent = 'geo ' + _updateInfo.geo.remote;
@@ -4649,8 +4962,11 @@ async function suRecheck() {
       document.getElementById('updateBtn').classList.toggle('hidden', !needsAttention);
     }
   } catch (e) {}
+  _suKeepInputs = true;
   renderServerUpdates();
+  _suKeepInputs = false;
   _suSetBusy(false);
+  return answered;
 }
 
 function _suSanitizeName(el) {
@@ -4752,26 +5068,73 @@ async function applyAllUpdates() {
   } catch (e) { toast('Ошибка: ' + e.message); if (_updatePollTimer) clearInterval(_updatePollTimer); }
   _suSetBusy(false);
 }
-// Принудительное обновление ОДНОГО блока (панель / гео / шаблоны). Эндпоинты
+// Обновление или переустановка ОДНОГО блока (панель / гео / шаблоны). Эндпоинты
 // форсированные: панель и гео перекачиваются без сверки версий и требуют рестарта,
 // шаблоны — без рестарта (заодно тянут свои шаблоны с byfox).
 const _SU_ONE = {
-  panel: {url: '/api/update/apply-panel', label: 'панель',              restart: true},
-  geo:   {url: '/api/update/apply-geo',   label: 'гео-базы',            restart: true},
-  bm7:   {url: '/api/update/apply-bm7',   label: 'шаблоны',             restart: false},
+  panel: {url: '/api/update/apply-panel', label: 'панель',   prefix: 'suPanel', restart: true,
+          reinstall: 'Панель скачается заново и ляжет поверх текущей: код заменится целиком. Клиенты, настройки и логи не затрагиваются. Панель перезапустится на несколько секунд.'},
+  geo:   {url: '/api/update/apply-geo',   label: 'гео-базы', prefix: 'suGeo',   restart: true,
+          reinstall: 'Гео-базы скачаются заново и заменят текущие. Панель перезапустится на несколько секунд.'},
+  bm7:   {url: '/api/update/apply-bm7',   label: 'шаблоны',  prefix: 'suBm7',   restart: false,
+          reinstall: 'Библиотека шаблонов скачается заново. Списки, уже выбранные у клиентов, не изменятся. Перезапуск не требуется.'},
 };
+
+// Версии блока для диалогов. older — на сервере обновлений версия старше установленной:
+// форсированная установка вернула бы панель назад, так бывает, пока CDN не догнал сервер.
+function _suVersions(kind) {
+  const u = (_updateInfo && _updateInfo[kind]) || {};
+  if (kind === 'panel') {
+    const nums = s => String(s || '').split('.').map(x => parseInt(x) || 0);
+    const [a, b] = [nums(u.remote), nums(u.current)];
+    let older = false;
+    for (let i = 0; i < 3; i++) {
+      if ((a[i] || 0) !== (b[i] || 0)) { older = (a[i] || 0) < (b[i] || 0); break; }
+    }
+    return {cur: u.current ? 'v' + u.current : '—', remote: u.remote ? 'v' + u.remote : '', older: !!u.remote && older};
+  }
+  if (kind === 'geo') {
+    return {cur: _suGeoDate(u.local) || '—', remote: _suGeoDate(u.remote),
+            older: !!u.remote && !!u.local && u.remote < u.local};
+  }
+  return {cur: u.local || '—', remote: u.remote || '', older: false};
+}
+
+async function _suConfirmReinstall(kind) {
+  const c = _SU_ONE[kind];
+  await suRecheck('');   // решение принимается по свежим версиям, а не по открытию окна
+  const v = _suVersions(kind);
+  if (!v.remote) {
+    await openAlert({title: 'Нет связи с сервером обновлений',
+                     body: 'Переустановка скачивает файлы оттуда. Попробуйте позже.', okLabel: 'Понятно'});
+    return false;
+  }
+  const line = `<div style="margin-top:10px;">Установлена ${escHtml(v.cur)}, на сервере обновлений ${escHtml(v.remote)}.</div>`;
+  if (v.older) {
+    return openConfirm({
+      title: 'Переустановка вернёт старую версию',
+      body: `<div>${c.reinstall}</div>${line}<div style="margin-top:10px;">На сервере обновлений версия старше установленной: будет установлена ${escHtml(v.remote)}, и более новые исправления пропадут.</div>`,
+      okLabel: 'Вернуть старую версию', danger: true,
+    });
+  }
+  return openConfirm({title: 'Переустановить: ' + c.label + '?', body: `<div>${c.reinstall}</div>${line}`, okLabel: 'Переустановить'});
+}
 
 // opts.noConfirm — запуск без диалога (кнопка «Обновить шаблоны» в каталоге правил:
 // операция без перезапуска и без побочных эффектов, спрашивать не о чем).
+// opts.reinstall — та же установка, но со своим диалогом и сверкой версий.
 async function suApplyOne(kind, opts) {
   if (_updateBusy) return false;
   const c = _SU_ONE[kind];
   if (!c) return false;
-  if (!(opts && opts.noConfirm)) {
+  if (opts && opts.reinstall) {
+    if (!await _suConfirmReinstall(kind)) return false;
+  } else if (!(opts && opts.noConfirm)) {
+    const v = _suVersions(kind);
     const ok = await openConfirm({
       title: 'Обновить: ' + c.label + '?',
-      body: 'Принудительное обновление «' + escHtml(c.label) + '» — выполнится, даже если версия уже актуальна.'
-          + (c.restart ? '\nПанель перезапустится.' : '\nПерезапуск не требуется.'),
+      body: `<div>Установлена ${escHtml(v.cur)}, будет установлена ${escHtml(v.remote || '—')}.</div>`
+          + `<div style="margin-top:10px;">${c.restart ? 'Панель перезапустится.' : 'Перезапуск не требуется.'}</div>`,
       okLabel: 'Обновить',
     });
     if (!ok) return false;
@@ -4791,7 +5154,7 @@ async function suApplyOne(kind, opts) {
         return;   // busy не снимаем — идёт перезапуск
       }
       if (_updatePollTimer) clearInterval(_updatePollTimer);
-      toast(c.label + ': обновлено');
+      toast(j.message || (c.label + ': обновлено'));   // у шаблонов бэкенд пишет, что изменилось
       done = true;
       _updateInfo = null; await checkForUpdates(); renderServerUpdates();
     } else {
@@ -7086,6 +7449,8 @@ function _xrayViaBadge(c) {
 }
 
 function renderXrayClients(clients) {
+  if (_clientDragDefer('xray', () => renderXrayClients(_lastXrayData || clients))) return;
+  clients = _clientOrderSort('xray', clients, c => c.uuid);
   const list = document.getElementById('xrayList');
   // Always render Global rules card first.
   const globalCard = renderGlobalRulesCard();
@@ -7127,7 +7492,7 @@ function renderXrayClients(clients) {
     const uuidAttr = escAttr(c.uuid);
     const nameAttr = escAttr(c.name || '');
     return `
-    <div class="peer-card${collapsed ? ' collapsed' : ''}">
+    <div class="peer-card${collapsed ? ' collapsed' : ''}" data-ckey="${uuidAttr}">
       <div class="peer-top">
         <div class="peer-name">
           <div class="peer-name-row">
@@ -10997,7 +11362,20 @@ async function addRuleList(platform) {
   _updNewBtns(sfx);
   toast('Список добавлен: ' + name);
   await loadRuleListCatalogInto();
+  _rmKeepAddFormVisible(sfx);
   refreshXray();
+}
+
+// Новая карточка встаёт над формой и сдвигает её вниз, под прилипший низ окна
+// с «Закрыть». Докручиваем окно так, чтобы кнопки формы снова были видны.
+function _rmKeepAddFormVisible(sfx) {
+  const btn = document.getElementById('addBtn' + sfx);
+  const box = btn && btn.closest('.modal');
+  if (!box) return;
+  const foot = box.querySelector(':scope > .modal-actions');
+  const limit = foot ? foot.getBoundingClientRect().top : box.getBoundingClientRect().bottom;
+  const over = btn.getBoundingClientRect().bottom + 12 - limit;
+  if (over > 0) box.scrollTop += over;
 }
 
 async function deleteRuleList(platform, id, name) {

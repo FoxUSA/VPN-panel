@@ -652,6 +652,23 @@ body::before {
   box-shadow: 0 10px 28px rgba(0, 0, 0, .45);
   transform: scale(1.06); opacity: .96; cursor: grabbing;
 }
+/* Перетаскивание карточек клиентов (XRay, AWG, Hysteria) за шапку: свёрнутая
+   копия едет за курсором, на месте, куда карточка встанет, — пунктирное окно,
+   соседи расступаются (FLIP в app.js). Global rules без data-ckey — не тащится.
+   Ручка — только блок имени, растянутый до кнопок; ряд кнопок справа — не ручка,
+   иначе курсор мигал между стрелкой и «рукой» в зазорах между кнопками. */
+.peer-card[data-ckey] > .peer-top > .peer-name { flex: 1 1 auto; cursor: grab; }
+.client-dragging, .client-dragging * { cursor: grabbing !important; user-select: none !important; -webkit-user-select: none !important; }
+.peer-card.client-drag-placeholder {
+  background: transparent; border: 1px dashed var(--accent);
+}
+.peer-card.client-drag-placeholder > * { visibility: hidden; }
+.client-drag-ghost {
+  z-index: 10000; pointer-events: none; box-sizing: border-box;
+  border-color: var(--accent) !important;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, .5);
+  transform: scale(1.015); opacity: .97;
+}
 
 /* Mihomo (каскад через второй VPN) */
 /* Тот же контейнер описания, что у .rule-mgr-help / .dns-info: подложка var(--bg),
@@ -1319,8 +1336,11 @@ body::before {
   font-weight: 500;
   color: var(--text);
 }
-/* Принудительное обновление каждого блока — прижата вправо, к краю карточки. */
-.su-upd-btn { margin-left: auto; }
+/* Действия блока «Сервер и обновления». Три кнопки в ряд в окно не влезают, поэтому
+   зелёная «Обновить» (есть обновление) идёт первой строкой на всю ширину, остальные — поровну под ней. */
+.su-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.su-actions .btn { flex: 1 1 auto; }
+.su-actions .su-upd-main { flex-basis: 100%; order: -1; }
 
 /* Переключатель платформы: показывает пути, которые панель реально
    подставляет в конфиг Shadowrocket / Loon / Clash. */
@@ -2756,14 +2776,8 @@ body::before {
         <a href="https://byfox.dev/mihomolauncher/" target="_blank" rel="noopener">Mihomo Launcher <span class="ul-card-os">Win</span></a>
       </div>
       <div class="ul-card">
-        <div class="ul-card-title">Loon &amp; Clash <span class="ul-card-os">iOS</span></div>
-        <a href="https://apps.apple.com/app/id1373567447" target="_blank" rel="noopener">Loon (paid)</a>
-        <a href="https://apps.apple.com/app/id6744321968" target="_blank" rel="noopener">Clash Mi (free)</a>
-      </div>
-      <div class="ul-card">
-        <div class="ul-card-title">Clash Meta <span class="ul-card-os">Android</span></div>
-        <a href="https://github.com/MetaCubeX/ClashMetaForAndroid/releases" target="_blank" rel="noopener">GitHub Releases</a>
-        <a href="https://f-droid.org/packages/com.github.metacubex.clash.meta/" target="_blank" rel="noopener">F-Droid</a>
+        <div class="ul-card-title">Телефон <span class="ul-card-os">iOS · Android</span></div>
+        <a href="https://byfox.dev/awg-panel/appvpn/" target="_blank" rel="noopener">Скачать приложение</a>
       </div>
       <div class="ul-card">
         <div class="ul-card-title">Наборы правил</div>
@@ -2856,7 +2870,11 @@ body::before {
           <span class="switch switch-tinted"><input type="checkbox" id="suPanelAuto" onchange="this.closest('.switch-row').classList.toggle('is-on', this.checked); _suCheckDirty()"><span class="switch-slider"></span></span>
           <span class="switch-row-lbl">Автообновление</span>
         </label>
-        <button class="btn btn-sm btn-ghost su-upd-btn" onclick="suApplyOne('panel')" title="Принудительно обновить сейчас">Обновить</button>
+      </div>
+      <div class="su-actions">
+        <button id="suPanelCheckBtn" class="btn btn-sm btn-ghost su-upd-btn" onclick="suCheckOne('panel')">Проверить</button>
+        <button class="btn btn-sm btn-ghost su-upd-btn" onclick="suApplyOne('panel', {reinstall: true})" title="Скачать заново и поставить поверх текущей">Переустановить</button>
+        <button id="suPanelUpdBtn" class="btn btn-sm btn-success su-upd-btn su-upd-main hidden" onclick="suApplyOne('panel')">Обновить</button>
       </div>
     </div>
 
@@ -2871,7 +2889,11 @@ body::before {
           <span class="switch switch-tinted"><input type="checkbox" id="suGeoAuto" onchange="this.closest('.switch-row').classList.toggle('is-on', this.checked); _suCheckDirty()"><span class="switch-slider"></span></span>
           <span class="switch-row-lbl">Автообновление</span>
         </label>
-        <button class="btn btn-sm btn-ghost su-upd-btn" onclick="suApplyOne('geo')" title="Принудительно обновить сейчас">Обновить</button>
+      </div>
+      <div class="su-actions">
+        <button id="suGeoCheckBtn" class="btn btn-sm btn-ghost su-upd-btn" onclick="suCheckOne('geo')">Проверить</button>
+        <button class="btn btn-sm btn-ghost su-upd-btn" onclick="suApplyOne('geo', {reinstall: true})" title="Скачать заново и поставить поверх текущей">Переустановить</button>
+        <button id="suGeoUpdBtn" class="btn btn-sm btn-success su-upd-btn su-upd-main hidden" onclick="suApplyOne('geo')">Обновить</button>
       </div>
     </div>
 
@@ -2886,7 +2908,11 @@ body::before {
           <span class="switch switch-tinted"><input type="checkbox" id="suBm7Auto" onchange="this.closest('.switch-row').classList.toggle('is-on', this.checked); _suCheckDirty()"><span class="switch-slider"></span></span>
           <span class="switch-row-lbl">Автообновление</span>
         </label>
-        <button class="btn btn-sm btn-ghost su-upd-btn" onclick="suApplyOne('bm7')" title="Принудительно обновить сейчас">Обновить</button>
+      </div>
+      <div class="su-actions">
+        <button id="suBm7CheckBtn" class="btn btn-sm btn-ghost su-upd-btn" onclick="suCheckOne('bm7')">Проверить</button>
+        <button class="btn btn-sm btn-ghost su-upd-btn" onclick="suApplyOne('bm7', {reinstall: true})" title="Скачать заново и поставить поверх текущей">Переустановить</button>
+        <button id="suBm7UpdBtn" class="btn btn-sm btn-success su-upd-btn su-upd-main hidden" onclick="suApplyOne('bm7')">Обновить</button>
       </div>
     </div>
 
