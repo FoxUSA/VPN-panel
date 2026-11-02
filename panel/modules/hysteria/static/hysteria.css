@@ -1,0 +1,349 @@
+/* Стили вкладки Hysteria. Опираются на переменные темы панели, чтобы вкладка
+   выглядела так же, как остальные, и корректно жила в светлой и тёмной теме. */
+
+.hy-banner {
+  background: var(--bg);
+  border: 1px solid var(--border2);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+  color: var(--text2);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.hy-empty {
+  color: var(--text3);
+  font-size: 13px;
+  padding: 18px;
+  text-align: center;
+}
+
+.hy-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.hy-name {
+  font-weight: 600;
+  font-size: 15px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hy-actions {
+  display: flex;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.hy-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+.hy-dot-on { background: var(--green); }
+.hy-dot-idle { background: var(--border2); }
+.hy-dot-off { background: var(--text3); }
+
+.hy-badge {
+  font-size: 11px;
+  color: var(--text3);
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  padding: 1px 6px;
+  flex: 0 0 auto;
+}
+
+.hy-card-meta {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text3);
+}
+.hy-card-meta .hy-total { margin-left: auto; }
+
+.hy-off .hy-name { color: var(--text3); }
+
+.hy-link-box {
+  background: var(--bg);
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  /* Ссылка длинная: пусть переносится, а не растягивает модалку. */
+  word-break: break-all;
+  font-size: 12px;
+}
+
+/* Белая подложка и поля — как у QR в конфиге XRay: без них QR прилипал то к
+   вкладкам сверху, то к подписи снизу, а тёмная тема съедала тихую зону. */
+.hy-qr {
+  display: flex;
+  justify-content: center;
+  padding: 16px;
+  background: #fff;
+  border-radius: 8px;
+  margin: 14px 0 16px;
+}
+.hy-qr:empty { display: none; }
+.hy-qr img, .hy-qr canvas { border-radius: 6px; }
+
+.hy-field {
+  display: block;
+  margin-bottom: 12px;
+}
+.hy-field > span {
+  display: block;
+  font-size: 12px;
+  color: var(--text3);
+  margin-bottom: 4px;
+}
+/* Составной селектор: в панели .modal input[type=...] задаёт width:100%,
+   и одиночного класса не хватило бы, чтобы это переопределить. */
+.hy-modal .hy-field input {
+  width: 100%;
+  box-sizing: border-box;
+}
+/* Селект панель не стилизует нигде, кроме .psvc-inp, поэтому свой вид ему
+   нужен здесь: без этого он рисуется системным виджетом — белый фон, чужой
+   шрифт — и выглядит вставкой из другой программы посреди тёмной модалки. */
+.hy-modal .hy-field select {
+  width: 100%;
+  box-sizing: border-box;
+  height: 36px;
+  padding: 0 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  margin: 0;
+}
+.hy-modal .hy-field select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* В панели .btn-primary объявлен с width:100% (это нужно форме входа).
+   Внутри наших блоков кнопки должны быть по содержимому — переопределяем
+   селекторами достаточной специфичности, глобальное правило не трогаем. */
+#sectionHysteria .toolbar .btn,
+.hy-banner .btn,
+.hy-modal .modal-actions .btn,
+.hy-modal .hy-conf-actions .btn,
+.hy-modal .plat-block-head .btn {
+  width: auto;
+}
+
+/* Подсказку заполняет _setHint из app.js — здесь только её место в модалке. */
+.hy-modal .input-hint {
+  font-size: 12px;
+  margin: -6px 0 10px;
+  min-height: 14px;
+}
+
+.hy-check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  cursor: pointer;
+  font-size: 13px;
+}
+/* Чекбоксы в модалке панели по умолчанию тянутся на всю ширину — фиксируем. */
+.hy-modal .hy-check input[type="checkbox"] {
+  width: 16px;
+  flex: 0 0 16px;
+  margin: 0;
+}
+.hy-rules {
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin: 12px 0;
+}
+
+.hy-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+.hy-tab {
+  background: transparent;
+  border: 1px solid var(--border2);
+  color: var(--text3);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.hy-tab.is-on { color: var(--text); border-color: var(--accent); }
+
+.hy-conf {
+  background: var(--bg);
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 12px 0;
+  font-size: 12px;
+  max-height: 300px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.hy-conf-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+/* Блок Config URL в модалке конфига — тот же вид, что у карточек URL в
+   модалке XRay: подложка var(--bg) + рамка, моноширинный адрес, кнопки снизу. */
+.hy-url-box {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px;
+  margin: 12px 0;
+}
+.hy-url-box .lbl {
+  font-size: 11px;
+  color: var(--text3);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 8px;
+}
+.hy-url-note {
+  color: var(--text2);
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: normal;
+}
+.hy-url {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: var(--accent);
+  overflow-wrap: anywhere;
+  margin-bottom: 10px;
+  line-height: 1.5;
+}
+/* Отступ сверху: без него подсказка липнет к кнопкам и читается как их подпись. */
+.hy-url-where { color: var(--text3); font-size: 12px; margin-top: 12px; line-height: 1.5; }
+.hy-url-where b { color: var(--text2); }
+.hy-conf-cap {
+  font-size: 11px;
+  color: var(--text3);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 16px 0 6px;
+}
+/* Подсказка вкладки не должна липнуть к тому, что под ней. */
+.hy-pane > .hy-hint { margin-bottom: 14px; }
+/* QR под своей подписью — вплотную к ней, отступ сверху даёт подпись. */
+.hy-conf-cap + .hy-qr { margin-top: 0; }
+
+.hy-streams { margin-top: 12px; }
+.hy-stream-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border2);
+  font-size: 12px;
+}
+.hy-stream-row:last-child { border-bottom: none; }
+.hy-stream-addr { word-break: break-all; }
+.hy-stream-bytes { color: var(--text3); flex: 0 0 auto; }
+
+.hy-hint {
+  font-size: 12px;
+  color: var(--text3);
+  line-height: 1.5;
+  background: var(--bg);
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.hy-modal-body { margin: 14px 0; }
+
+/* Разбор «почему нет ссылки на профиль». Подложка как у .hy-hint (--bg + рамка):
+   на surface2 блок сливался бы с телом модалки. */
+.hy-access {
+  background: var(--bg);
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  padding: 12px 14px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text3);
+}
+.hy-acc-title { color: var(--text); font-weight: 600; font-size: 13px; margin-bottom: 9px; }
+.hy-acc-steps { display: flex; flex-direction: column; gap: 8px; }
+.hy-acc-step { display: flex; gap: 9px; align-items: flex-start; }
+.hy-acc-step b { color: var(--text2); font-weight: 600; }
+.hy-acc-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  flex: 0 0 auto; margin-top: 5px; background: var(--text3);
+}
+.hy-acc-dot.ok   { background: #3fb950; }
+.hy-acc-dot.warn { background: #d29922; }
+.hy-acc-dot.bad  { background: #f85149; }
+
+.hy-acc-fixes { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+.hy-acc-fix {
+  display: flex; gap: 12px; align-items: center;
+  background: var(--surface2, rgba(127,127,127,.07));
+  border: 1px solid var(--border2); border-radius: 8px; padding: 10px 12px;
+}
+.hy-acc-fix-txt { flex: 1; min-width: 0; }
+.hy-acc-fix-txt b { color: var(--text); font-weight: 600; }
+.hy-acc-fix .btn { flex: 0 0 auto; }
+
+.hy-acc-manual { margin-top: 12px; }
+.hy-acc-cmd { display: flex; gap: 8px; align-items: center; margin-top: 5px; }
+.hy-acc-cmd code {
+  flex: 1; min-width: 0; word-break: break-all;
+  font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text2);
+  background: var(--bg); border: 1px solid var(--border2);
+  border-radius: 6px; padding: 6px 8px;
+}
+.hy-acc-foot { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border2); }
+
+@media (max-width: 640px) {
+  .hy-acc-fix { flex-direction: column; align-items: stretch; }
+  .hy-acc-cmd { flex-direction: column; align-items: stretch; }
+}
+
+/* Имя клиента в общем списке соединений (кнопка «Соединения» в карточке правил). */
+.hy-stream-user {
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-weight: 600;
+  min-width: 90px;
+}
+
+/* Тумблер журнала в панели инструментов. .switch-row по умолчанию тянется на
+   всю ширину формы — рядом с кнопками он должен занимать только себя. */
+#sectionHysteria .toolbar .hy-log-switch {
+  width: auto;
+  margin: 0;
+  padding: 0 4px 0 0;
+  gap: 8px;
+  cursor: pointer;
+}
+#sectionHysteria .toolbar .hy-log-switch .switch-row-lbl {
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+/* Адаптив — последним блоком: «total · limit» в строке имени не помещается
+   рядом с длинным именем на телефоне — переносим под него (как у tgweb). */
+@media (max-width: 640px) {
+  #sectionHysteria .peer-name-row { flex-wrap: wrap; row-gap: 2px; overflow-wrap: anywhere; }
+  #sectionHysteria .peer-name-row .traffic-total--inline { margin-left: 18px; white-space: normal; }
+}

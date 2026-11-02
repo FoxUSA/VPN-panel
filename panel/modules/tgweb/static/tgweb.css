@@ -1,0 +1,173 @@
+/* Telegram WEB-прокси: переключатель «MTProto | WEB» во вкладке «Telegram» и
+   панель WEB. Только переменные темы панели — светлая и тёмная живут сами.
+   Подложки блоков — --bg + рамка: --surface2 сливается с фоном модалки. */
+
+.tg-seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  margin: 0 0 16px;
+  background: var(--bg);
+  border: 1px solid var(--border2);
+  border-radius: 10px;
+}
+.tg-seg button {
+  border: 0;
+  background: transparent;
+  color: var(--text2);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 7px 16px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+.tg-seg button.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.tg-banner {
+  background: var(--bg);
+  border: 1px solid var(--border2);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+  color: var(--text2);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.tg-banner-warn {
+  margin-top: 8px;
+  color: var(--orange);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.tg-banner-warn a { color: inherit; text-decoration: underline; }
+
+.tg-sub { font-size: 13px; color: var(--text3); font-weight: normal; }
+.tg-tile-sub { font-size: 12px; color: var(--text3); margin-top: 4px; }
+
+.tg-inline-edit {
+  font-size: 11px;
+  color: var(--accent);
+  margin-left: 6px;
+  text-decoration: none;
+}
+
+/* В панели .btn-primary объявлен с width:100% (ради формы входа) — внутри
+   наших блоков кнопки по содержимому. */
+#tgPaneWeb .toolbar .btn,
+.tg-banner .btn,
+.tg-modal .modal-actions .btn,
+.tg-modal .tg-link-actions .btn,
+.tg-modal .tg-copy-row .btn {
+  width: auto;
+}
+
+.tg-modal-body { margin: 14px 0; }
+
+.tg-field { display: block; margin-bottom: 12px; }
+.tg-field > span { display: block; font-size: 12px; color: var(--text3); margin-bottom: 4px; }
+/* Составной селектор: .modal input[type=...] панели задаёт width:100%. */
+.tg-modal .tg-field input { width: 100%; box-sizing: border-box; }
+.tg-modal .input-hint { font-size: 12px; margin: -6px 0 10px; min-height: 14px; }
+
+.tg-hint {
+  font-size: 12px;
+  color: var(--text3);
+  line-height: 1.5;
+  background: var(--bg);
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.tg-qr {
+  display: flex;
+  justify-content: center;
+  padding: 14px;
+  background: #fff;
+  border-radius: 8px;
+  margin: 4px auto 12px;
+  width: fit-content;
+}
+.tg-qr img, .tg-qr canvas { border-radius: 6px; }
+
+.tg-link-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+
+.tg-copy-row {
+  display: grid;
+  grid-template-columns: 110px 1fr auto;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.tg-copy-row .lbl { font-size: 12px; color: var(--text3); }
+.tg-code {
+  font-size: 11.5px;
+  background: var(--bg);
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  padding: 6px 8px;
+  overflow-wrap: anywhere;
+  color: var(--text);
+}
+
+.tg-manual { margin-top: 10px; }
+.tg-manual summary { cursor: pointer; font-size: 13px; color: var(--text2); }
+
+.tg-tabs { display: flex; gap: 6px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+.tg-tabs button[data-ltab] {
+  border: 1px solid var(--border2);
+  background: var(--bg);
+  color: var(--text2);
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+.tg-tabs button[data-ltab].active { border-color: var(--accent); color: var(--accent); }
+.tg-logs-reload { margin-left: auto; width: auto; }
+
+.tg-logs { max-height: 60vh; overflow: auto; }
+.tg-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.tg-table th, .tg-table td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border2);
+  vertical-align: top;
+}
+.tg-table th { color: var(--text3); font-weight: 600; }
+
+.tg-kv {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border2);
+}
+.tg-kv span { color: var(--text3); }
+.tg-kv b { font-weight: 600; text-align: right; overflow-wrap: anywhere; }
+
+/* Длинное имя + «total · limit (исчерпан)» не должны выталкивать кнопки за
+   край карточки: левая часть сжимается, трафик переносится под имя. */
+#tgPaneWeb .peer-name { min-width: 0; flex: 1 1 auto; }
+#tgPaneWeb .peer-name-row { flex-wrap: wrap; row-gap: 2px; }
+#tgPaneWeb .peer-actions { flex: 0 0 auto; }
+
+/* Адаптив — последним блоком: @media выше перебивался бы правилами ниже. */
+@media (max-width: 640px) {
+  .tg-seg { display: flex; }
+  .tg-seg button { flex: 1 1 0; padding: 8px 6px; }
+  .tg-copy-row { grid-template-columns: 1fr; gap: 4px; }
+  .tg-copy-row .btn { justify-self: start; }
+  .tg-table th:nth-child(4), .tg-table td:nth-child(4) { display: none; }
+  /* «total · limit» в строке имени не помещается рядом с длинным именем —
+     переносим под него, иначе карточка вылезает за экран. */
+  #tgPaneWeb .peer-name-row { flex-wrap: wrap; row-gap: 2px; }
+  #tgPaneWeb .peer-name-row .traffic-total--inline { margin-left: 18px; white-space: normal; }
+  #tgPaneWeb .peer-name-row { overflow-wrap: anywhere; }
+}

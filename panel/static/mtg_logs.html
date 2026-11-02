@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Логи MTProto — Панель byFox.dev</title>
+<link rel="icon" type="image/x-icon" href="/favicon.ico">
+<style>
+/* Телефон: без оттягивания страницы вверх/вниз (pull-to-refresh в Chrome,
+   «пружина» в Safari). Прокрутку таблиц и модалок не трогает. */
+html, body { overscroll-behavior: none; }
+
+  :root {
+    --bg: #0a0e14;
+    --bg2: #0f1620;
+    --surface: #141c28;
+    --surface2: #1a2432;
+    --border: #1f2937;
+    --text: #e6edf3;
+    --text2: #9aa4b3;
+    --text3: #5c6675;
+    --accent: #22d3ee;
+    --accent-glow: rgba(34, 211, 238, 0.1);
+    --green: #22c55e;
+    --red: #f87171;
+    --orange: #f59e0b;
+  }
+  * { box-sizing: border-box; }
+  .hidden { display: none !important; }
+  html, body {
+    margin: 0; padding: 0; background: var(--bg); color: var(--text);
+    font-family: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 14px; line-height: 1.5;
+  }
+  .wrap { max-width: 1400px; margin: 0 auto; padding: 24px; }
+  /* Страница сама не прокручивается: шапка (заголовок, управление,
+     «Записей: …») стоит сверху, а таблица прокручивается в оставшейся высоте
+     экрана в обе стороны. Так названия столбцов можно закрепить (sticky th) и
+     на телефоне, где таблица и так прокручивается вбок внутри своей обёртки. */
+  html, body { height: 100%; }
+  .wrap { height: 100vh; height: 100dvh; box-sizing: border-box; display: flex; flex-direction: column; }
+  .logs-head { flex: none; padding-bottom: 10px; }
+  #content { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+  .logs-scroll {
+    flex: 1 1 auto; min-height: 0; overflow: auto;
+    overscroll-behavior: none;  /* без отскока от краёв таблицы */
+    background: var(--bg2); border: 1px solid var(--border); border-radius: 8px;
+  }
+  .logs-scroll thead th {
+    position: sticky; top: 0; z-index: 2;
+    background: var(--surface);
+    box-shadow: inset 0 -1px 0 var(--border);
+  }
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; gap: 12px; margin-bottom: 16px;
+  }
+  h1 { font-size: 20px; font-weight: 600; margin: 0; }
+  h1 .name { color: var(--accent); }
+  .tabs { display: flex; gap: 4px; background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; padding: 4px; margin-bottom: 16px; width: fit-content; }
+  .tab-btn { padding: 8px 18px; background: transparent; border: none; color: var(--text2); font-family: 'Outfit', sans-serif; font-size: 14px; font-weight: 500; cursor: pointer; border-radius: 7px; transition: all 0.15s; }
+  .tab-btn:hover { color: var(--text); }
+  .tab-btn.active { background: var(--accent); color: var(--bg); }
+  .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+  .toolbar input[type=text] { padding: 8px 12px; background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-family: inherit; font-size: 13px; outline: none; min-width: 220px; }
+  .toolbar input[type=text]:focus { border-color: var(--accent); }
+  .toolbar select { padding: 8px 12px; background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-family: inherit; font-size: 13px; outline: none; }
+  .btn { padding: 8px 14px; background: transparent; border: 1px solid var(--border); border-radius: 6px; color: var(--text2); font-family: inherit; font-size: 13px; cursor: pointer; }
+  .btn:hover { border-color: var(--accent); color: var(--accent); }
+  #btnDebug { background: #322732; border-color: #432a32; color: #f87171; }
+  #btnDebug:hover { background: #432a32; border-color: #432a32; color: #f87171; }
+  .btn-success { background: var(--green); border-color: var(--green); color: #0a1f14; }
+  .btn-success:hover { background: #2bbd87; border-color: #2bbd87; color: #0a1f14; }
+  .filter-btn { padding: 8px 14px; border-radius: 6px; font-family: inherit; font-size: 13px; cursor: pointer; background: transparent; border: 1px solid var(--border); color: var(--text2); user-select: none; }
+  .filter-btn.live.on { border-color: var(--accent); color: var(--accent); background: var(--accent-glow); }
+  .filter-btn.live.off { opacity: 0.55; }
+  @keyframes live-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+  .filter-btn.live.on::first-letter { animation: live-pulse 1.4s ease-in-out infinite; }
+  .filter-btn.uniq.on { border-color: var(--accent); color: var(--accent); background: var(--accent-glow); }
+  .filter-btn.uniq.off { opacity: 0.7; }
+  .stats { color: var(--text3); font-size: 12px; margin-bottom: 8px; }
+  /* Рамка и скругление — у .logs-scroll: overflow:hidden на самой таблице
+     сломал бы закрепление названий столбцов. */
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  thead { background: var(--surface); color: var(--text2); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
+  th, td { padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--border); vertical-align: top; word-break: break-word; }
+  tr:last-child td { border-bottom: none; }
+  tbody tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
+  tr:hover td { background: var(--surface2) !important; }
+  td.mono { font-family: 'JetBrains Mono', 'Consolas', monospace; }
+  td.dim { color: var(--text3); }
+  .badge-cc { display: inline-block; padding: 1px 6px; background: var(--surface2); border: 1px solid var(--border); border-radius: 4px; font-size: 11px; color: var(--text2); margin-right: 6px; font-family: 'JetBrains Mono', monospace; }
+  .empty { padding: 60px 24px; text-align: center; color: var(--text3); background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; }
+  .empty.error { color: var(--red); }
+  .auth-banner { background: var(--accent-glow); border: 1px solid var(--accent); color: var(--accent); padding: 14px 18px; border-radius: 8px; margin-bottom: 16px; font-size: 13px; }
+  .auth-banner a { color: var(--accent); }
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.65); display: flex; align-items: center; justify-content: center; z-index: 100; padding: 16px; }
+  .modal { background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; max-width: 640px; width: 100%; padding: 24px; }
+  .modal h2 { margin: 0 0 12px; font-size: 18px; }
+  .modal p { color: var(--text2); margin: 0 0 12px; }
+  .modal pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text); overflow-x: auto; user-select: all; }
+  .modal .actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; margin-top: 14px; }
+  .dedup-stepper { display: inline-flex; align-items: stretch; gap: 0; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .dedup-stepper .dedup-btn { padding: 6px 10px; background: var(--bg2); border: 0; border-radius: 0; color: var(--text); font-size: 14px; line-height: 1; min-width: 32px; cursor: pointer; }
+  .dedup-stepper .dedup-btn:hover:not(:disabled) { color: var(--accent); }
+  .dedup-stepper .dedup-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+  .dedup-stepper .dedup-label { padding: 6px 12px; background: var(--bg2); color: var(--text2); font-size: 13px; white-space: nowrap; border-left: 1px solid var(--border); border-right: 1px solid var(--border); }
+  .dedup-stepper .dedup-label #dedupWinVal { color: var(--accent); font-weight: 600; }
+  @media (max-width: 720px) {
+    .wrap { padding: 14px; }
+    table { font-size: 12px; }
+    th, td { padding: 7px 8px; white-space: nowrap; }
+    .toolbar input[type=text] { min-width: 0; flex: 1; }
+    /* На телефоне строки не переносятся — таблица шире экрана и едет вбок. */
+    .logs-scroll table { min-width: max-content; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+<div class="logs-head">
+  <header>
+    <h1>Логи <span class="name">MTProto</span></h1>
+  </header>
+
+  <div class="toolbar">
+    <div class="tabs" style="margin:0;">
+      <button class="tab-btn active" id="tabOnline" onclick="switchTab('online')">Онлайн</button>
+      <button class="tab-btn" id="tabArchive" onclick="switchTab('archive')">Архив</button>
+    </div>
+    <button class="filter-btn live off" id="btnLive" onclick="toggleLiveBtn()">● Live</button>
+    <div class="dedup-stepper" title="Окно дедупликации — одинаковые записи в пределах окна сворачиваются в одну">
+      <button type="button" class="btn dedup-btn" id="dedupMinus" onclick="stepDedup(-1)" aria-label="Меньше">−</button>
+      <span class="dedup-label">Дедуп · <span id="dedupWinVal">60</span> мин</span>
+      <button type="button" class="btn dedup-btn" id="dedupPlus" onclick="stepDedup(1)" aria-label="Больше">+</button>
+    </div>
+    <input type="text" id="filter" placeholder="Поиск (IP, страна, ASN…)">
+    <select id="archiveLimit" class="hidden">
+      <option value="200">200</option>
+      <option value="500" selected>500</option>
+      <option value="1000">1000</option>
+      <option value="2000">2000</option>
+      <option value="5000">5000</option>
+    </select>
+    <button class="btn" onclick="reload(_tab)">Обновить</button>
+    <button class="btn hidden" id="btnDebug" onclick="openEnableModal()" title="Включить debug-логи в mtg">debug</button>
+  </div>
+
+  <div class="stats" id="stats"></div>
+</div>
+  <div id="content"></div>
+</div>
+
+<div class="modal-overlay hidden" id="enableModal">
+  <div class="modal">
+    <h2>Архив пуст: нужно включить debug-логи в mtg</h2>
+    <p>Журнал mtg по умолчанию пишет только ошибки. Чтобы видеть IP всех подключений, добавь <code>debug = true</code> в <code>/etc/mtg/config.toml</code> и перезапусти сервис.</p>
+    <p><b>Вариант 1 — кнопкой:</b> панель сама добавит строку и перезапустит mtg.</p>
+    <p><b>Вариант 2 — вручную</b> в терминале:</p>
+    <pre id="cmdBox">echo 'debug = true' &gt;&gt; /etc/mtg/config.toml &amp;&amp; systemctl restart mtg</pre>
+    <div class="actions">
+      <button class="btn" onclick="copyCmd()">Скопировать команду</button>
+      <button class="btn" onclick="closeEnableModal()">Закрыть</button>
+      <button class="btn btn-success" onclick="enableDebug()">Включить debug</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let _tab = 'online';
+let _live = false;  // живой режим включают сами — кнопкой Live
+let _dedupWinMin = 60;
+let _liveTimer = null;
+const LIVE_INTERVAL_MS = 2500;
+let _records = [];
+let _debugEnabled = null;
+let _lastRenderHash = '';
+let _lastFilter = '';
+let _archiveModalShown = false;  // показали ли модалку про debug в этой сессии вкладки Архив
+
+function escHtml(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+function fmtTs(ts) {
+  if (!ts || typeof ts !== 'string') return '';
+  // Формат панели: DD.MM.YYYY HH:MM:SS (секунды — если они есть в записи).
+  const m = ts.match(/^(\d{4})[-\/](\d{2})[-\/](\d{2})[ T](\d{2}:\d{2}(?::\d{2})?)/);
+  return m ? `${m[3]}.${m[2]}.${m[1]} ${m[4]}` : ts;
+}
+function switchTab(t) {
+  if (_tab === t) return;
+  _tab = t;
+  _lastRenderHash = '';
+  _archiveModalShown = false;  // при возврате на Архив снова покажем подсказку, если debug всё ещё выкл
+  document.getElementById('tabOnline').classList.toggle('active', t === 'online');
+  document.getElementById('tabArchive').classList.toggle('active', t === 'archive');
+  // Архивные контролы видны только на архиве.
+  document.getElementById('archiveLimit').classList.toggle('hidden', t !== 'archive');
+  updateDebugBtnVisibility();
+  reload(t);
+}
+
+function updateDebugBtnVisibility() {
+  // Кнопка «debug» видна только на вкладке Архив и только когда debug в mtg ВЫКЛЮЧЕН.
+  const show = _tab === 'archive' && _debugEnabled === false;
+  document.getElementById('btnDebug').classList.toggle('hidden', !show);
+}
+
+function toggleLiveBtn() {
+  _live = !_live;
+  const btn = document.getElementById('btnLive');
+  btn.classList.toggle('on', _live);
+  btn.classList.toggle('off', !_live);
+  setupLive();
+}
+
+function _tsToMs(s) {
+  if (!s || typeof s !== 'string') return 0;
+  const m = s.match(/^(\d{4})[-\/](\d{2})[-\/](\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
+  return m ? Date.UTC(+m[1], +m[2]-1, +m[3], +m[4], +m[5], +m[6]) : 0;
+}
+
+const DEDUP_STEPS = [1, 5, 10, 20, 30, 60, 90, 120, 150, 180, 240];
+
+function stepDedup(dir) {
+  const i = DEDUP_STEPS.indexOf(_dedupWinMin);
+  const ni = Math.max(0, Math.min(DEDUP_STEPS.length - 1, (i < 0 ? 5 : i) + dir));
+  _dedupWinMin = DEDUP_STEPS[ni];
+  document.getElementById('dedupWinVal').textContent = _dedupWinMin;
+  document.getElementById('dedupMinus').disabled = (ni === 0);
+  document.getElementById('dedupPlus').disabled = (ni === DEDUP_STEPS.length - 1);
+  _lastRenderHash = '';
+  render();
+}
+
+function setupLive() {
+  if (_liveTimer) { clearInterval(_liveTimer); _liveTimer = null; }
+  _liveTimer = setInterval(() => {
+    if (document.hidden) return;
+    if (_live) reload(_tab, {silent: true});
+  }, LIVE_INTERVAL_MS);
+}
+
+async function checkDebugStatus() {
+  try {
+    const r = await fetch('/api/mtg/logs/debug-status', {credentials: 'same-origin'});
+    if (r.status === 401) return null;
+    if (!r.ok) return null;
+    const d = await r.json();
+    _debugEnabled = !!d.debug_enabled;
+    return _debugEnabled;
+  } catch (e) { return null; }
+}
+
+async function reload(t, opts) {
+  opts = opts || {};
+  if (t !== _tab) return;
+  if (!opts.silent) document.getElementById('content').innerHTML = '<div class="empty">Загружаем…</div>';
+  try {
+    let url;
+    if (t === 'online') url = '/api/mtg/logs/online';
+    else url = '/api/mtg/logs/archive?limit=' + document.getElementById('archiveLimit').value;
+    const res = await fetch(url, {credentials: 'same-origin'});
+    if (res.status === 401) {
+      document.getElementById('content').innerHTML = '<div class="auth-banner">Не авторизован. <a href="/" target="_blank">Откройте панель</a> и войдите, затем нажмите «Обновить».</div>';
+      return;
+    }
+    if (!res.ok) {
+      document.getElementById('content').innerHTML = '<div class="empty error">Ошибка ' + res.status + '</div>';
+      return;
+    }
+    const data = await res.json();
+    _debugEnabled = !!data.debug_enabled;
+    updateDebugBtnVisibility();
+    // Архив требует debug=true в mtg, иначе журнал не содержит stream-events.
+    // При выключенном debug на вкладке Архив показываем модалку с инструкцией.
+    if (t === 'archive' && !_debugEnabled) {
+      document.getElementById('content').innerHTML = '<div class="empty">Архив требует debug=true в mtg. Нажмите кнопку «debug» в тулбаре, чтобы включить.</div>';
+      document.getElementById('stats').textContent = '';
+      _lastRenderHash = '';
+      // Модалку показываем один раз на сессии вкладки. Если юзер закрыл — повторно не дёргаем.
+      if (!_archiveModalShown) {
+        _archiveModalShown = true;
+        openEnableModal();
+      }
+      return;
+    }
+    _records = data.records || [];
+    render();
+  } catch (e) {
+    console.error(e);
+    document.getElementById('content').innerHTML = '<div class="empty error">Не удалось загрузить: ' + escHtml(e.message) + '</div>';
+  }
+}
+
+function render() {
+  const filter = document.getElementById('filter').value.trim().toLowerCase();
+  let rows = _records.filter(r => {
+    if (!filter) return true;
+    const g = r.geo || {};
+    return [r.ip, g.country, g.city, g.org].filter(Boolean).join(' ').toLowerCase().includes(filter);
+  });
+  const rowsBeforeDedup = rows.length;
+  // Дедуп с окном: записи с тем же IP в пределах N минут → одна группа с самой свежей датой и × N.
+  // Только для архива (Онлайн уже агрегирован по IP).
+  if (_dedupWinMin > 0 && _tab === 'archive' && rows.length > 1) {
+    const windowMs = _dedupWinMin * 60 * 1000;
+    const lastGroupByIp = new Map();
+    const groups = [];
+    for (const r of rows) {
+      const g = lastGroupByIp.get(r.ip);
+      const tMs = _tsToMs(r.ts);
+      if (g && (g._oldestMs - tMs) <= windowMs) {
+        g._count++;
+        g._oldestMs = tMs;
+      } else {
+        const ng = Object.assign({}, r, {_count: 1, _oldestMs: tMs});
+        groups.push(ng);
+        lastGroupByIp.set(r.ip, ng);
+      }
+    }
+    rows = groups;
+  }
+  const hash = _tab + '|' + filter + '|' + _dedupWinMin + '|' + JSON.stringify(rows);
+  if (hash === _lastRenderHash) return;
+  _lastRenderHash = hash;
+
+  const _en = !!(window.i18nLang && window.i18nLang() === 'en');
+  document.getElementById('stats').textContent = _en
+    ? ('Entries: ' + rows.length + (rows.length !== _records.length ? ' (total ' + _records.length + (rows.length !== rowsBeforeDedup ? ', collapsed from ' + rowsBeforeDedup + ', window ' + _dedupWinMin + ' min' : '') + ')' : ''))
+    : ('Записей: ' + rows.length + (rows.length !== _records.length ? ' (всего ' + _records.length + (rows.length !== rowsBeforeDedup ? ', свёрнуто из ' + rowsBeforeDedup + ', окно ' + _dedupWinMin + ' мин' : '') + ')' : ''));
+  if (!rows.length) {
+    document.getElementById('content').innerHTML = '<div class="empty">' + (_tab === 'online' ? 'Сейчас никто не подключён.' : 'Записей нет.') + '</div>';
+    return;
+  }
+  let html;
+  if (_tab === 'online') {
+    html = `
+      <div class="logs-scroll">
+      <table>
+        <thead><tr>
+          <th>IP клиента</th><th>Страна / город</th><th>Провайдер (ASN)</th>
+          <th style="text-align:right;">Стримов</th><th>Последний коннект</th>
+        </tr></thead>
+        <tbody>
+          ${rows.map(r => {
+            const g = r.geo || {};
+            const place = [g.country, g.city].filter(Boolean).join(', ') || '—';
+            const asn = g.org ? (g.asn ? `${escHtml(g.org)} <span class="dim">(AS${escHtml(g.asn)})</span>` : escHtml(g.org)) : '';
+            return `<tr>
+              <td class="mono">${escHtml(r.ip)}</td>
+              <td>${escHtml(place)}</td>
+              <td>${asn || '<span class="dim">—</span>'}</td>
+              <td class="mono" style="text-align:right;">${r.streams}</td>
+              <td class="mono dim">${escHtml(fmtTs(r.last_ts))}</td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+      </div>`;
+  } else {
+    html = `
+      <div class="logs-scroll">
+      <table>
+        <thead><tr>
+          <th style="white-space:nowrap;">Дата · Время</th>
+          <th>IP клиента</th><th>Страна / город</th><th>Провайдер (ASN)</th>
+        </tr></thead>
+        <tbody>
+          ${rows.map(r => {
+            const g = r.geo || {};
+            const place = [g.country, g.city].filter(Boolean).join(', ') || '—';
+            const asn = g.org ? (g.asn ? `${escHtml(g.org)} <span class="dim">(AS${escHtml(g.asn)})</span>` : escHtml(g.org)) : '';
+            return `<tr>
+              <td class="mono dim" style="white-space:nowrap;">${escHtml(fmtTs(r.ts))}${r._count > 1 ? ` <span style="color:var(--accent);font-weight:600;">×&nbsp;${r._count}</span>` : ''}</td>
+              <td class="mono">${escHtml(r.ip)}</td>
+              <td>${escHtml(place)}</td>
+              <td>${asn || '<span class="dim">—</span>'}</td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+      </div>`;
+  }
+  setTableHtml(html);
+}
+
+// Живой лог перерисовывает таблицу целиком — новая обёртка .logs-scroll
+// родилась бы с прокруткой 0, и таблица прыгала бы в начало посреди чтения.
+// Запоминаем прокрутку (таблица прокручивается сама, в обе стороны) и
+// возвращаем её после перерисовки.
+function setTableHtml(html) {
+  const box = document.getElementById('content');
+  const old = box.querySelector('.logs-scroll');
+  const sl = old ? old.scrollLeft : 0, st = old ? old.scrollTop : 0;
+  box.innerHTML = html;
+  const sc = box.querySelector('.logs-scroll');
+  if (sc) { sc.scrollLeft = sl; sc.scrollTop = st; }
+}
+
+// iOS до 16 не знает overscroll-behavior: таблица логов всё равно пружинила
+// бы от краёв (сверху — отрываясь от названий столбцов). Если таблица уже
+// упёрлась в край, а палец тянет дальше, гасим этот шаг жеста.
+(function () {
+  const box = document.getElementById('content');
+  let x0 = 0, y0 = 0;
+  box.addEventListener('touchstart', e => {
+    const t = e.touches[0];
+    x0 = t.clientX; y0 = t.clientY;
+  }, {passive: true});
+  box.addEventListener('touchmove', e => {
+    const sc = e.target.closest && e.target.closest('.logs-scroll');
+    if (!sc || e.touches.length !== 1) return;
+    const t = e.touches[0];
+    const dx = t.clientX - x0, dy = t.clientY - y0;
+    x0 = t.clientX; y0 = t.clientY;
+    let stop;
+    if (Math.abs(dy) >= Math.abs(dx)) {
+      stop = (dy > 0 && sc.scrollTop <= 0) ||
+             (dy < 0 && sc.scrollTop + sc.clientHeight >= sc.scrollHeight - 1);
+    } else {
+      stop = (dx > 0 && sc.scrollLeft <= 0) ||
+             (dx < 0 && sc.scrollLeft + sc.clientWidth >= sc.scrollWidth - 1);
+    }
+    if (stop && e.cancelable) e.preventDefault();
+  }, {passive: false});
+})();
+
+function openEnableModal() { document.getElementById('enableModal').classList.remove('hidden'); }
+function closeEnableModal() { document.getElementById('enableModal').classList.add('hidden'); }
+async function copyCmd() {
+  try {
+    await navigator.clipboard.writeText(document.getElementById('cmdBox').textContent);
+    alert('Команда скопирована');
+  } catch (e) { alert('Не получилось скопировать. Выдели вручную.'); }
+}
+async function enableDebug() {
+  try {
+    const r = await fetch('/api/mtg/logs/enable-debug', {method: 'POST', credentials: 'same-origin'});
+    const d = await r.json();
+    if (r.ok && d.ok) {
+      _debugEnabled = true;
+      _archiveModalShown = true;
+      closeEnableModal();
+      updateDebugBtnVisibility();
+      alert('debug=true включён, mtg перезапущен. Список наполнится по мере новых подключений клиентов.');
+      reload(_tab);
+    } else {
+      alert(d.error || 'Не удалось включить debug');
+    }
+  } catch (e) { alert('Ошибка: ' + e.message); }
+}
+
+document.getElementById('filter').addEventListener('input', () => render());
+document.getElementById('archiveLimit').addEventListener('change', () => reload('archive'));
+stepDedup(0); // initial disabled state for stepper buttons
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && _live) reload(_tab, {silent: true});
+});
+
+reload(_tab);
+setupLive();
+</script>
+<script src="/static/i18n-dict.js"></script>
+<script src="/static/i18n.js"></script>
+</body>
+</html>
