@@ -34,9 +34,9 @@ Debian/Ubuntu. Step-by-step guide inside the archive: `install_interactive.html`
 
 ## Source code & license
 
-The [archive](https://byfox.dev/data/awg-panel/awg-panel.zip) **is the source code** — Python (Flask) and vanilla JavaScript, no build or compilation step. Unpack it and read everything the panel runs.
+The source code is in [`panel/`](panel/): Python (Flask) and vanilla JavaScript, no build or compilation step. The [archive](https://byfox.dev/data/awg-panel/awg-panel.zip) contains the same files.
 
-Licensed under the [GNU AGPL-3.0](LICENSE) (or any later version): use, study and modify freely; if you distribute a modified panel or let others use it over a network, publish your changes under the same terms.
+Licensed under the [GNU AGPL-3.0](LICENSE) (or any later version): use, study and modify freely; if you distribute a modified panel or let others use it over a network, publish your changes under the same terms. Copies and modified versions must also keep the author attribution: see [NOTICE](NOTICE).
 
 ---
 

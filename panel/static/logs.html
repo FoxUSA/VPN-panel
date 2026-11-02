@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Логи — Панель byFox.dev</title>
+<link rel="icon" type="image/x-icon" href="/favicon.ico">
+<style>
+/* Телефон: без оттягивания страницы вверх/вниз (pull-to-refresh в Chrome,
+   «пружина» в Safari). Прокрутку таблиц и модалок не трогает. */
+html, body { overscroll-behavior: none; }
+
+  :root {
+    --bg: #0a0e14;
+    --bg2: #0f1620;
+    --surface: #141c28;
+    --surface2: #1a2432;
+    --border: #1f2937;
+    --text: #e6edf3;
+    --text2: #9aa4b3;
+    --text3: #5c6675;
+    --accent: #22d3ee;
+    --accent-glow: rgba(34, 211, 238, 0.1);
+    --green: #22c55e;
+    --red: #f87171;
+    --orange: #f59e0b;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+  .wrap { max-width: 1400px; margin: 0 auto; padding: 24px; }
+  /* Страница сама не прокручивается: шапка (заголовок, управление,
+     «Записей: …») стоит сверху, а таблица прокручивается в оставшейся высоте
+     экрана в обе стороны. Так названия столбцов можно закрепить (sticky th) и
+     на телефоне, где таблица и так прокручивается вбок внутри своей обёртки. */
+  html, body { height: 100%; }
+  .wrap { height: 100vh; height: 100dvh; box-sizing: border-box; display: flex; flex-direction: column; }
+  .logs-head { flex: none; padding-bottom: 10px; }
+  #content { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+  .logs-scroll {
+    flex: 1 1 auto; min-height: 0; overflow: auto;
+    overscroll-behavior: none;  /* без отскока от краёв таблицы */
+    background: var(--bg2); border: 1px solid var(--border); border-radius: 8px;
+  }
+  .logs-scroll thead th {
+    position: sticky; top: 0; z-index: 2;
+    background: var(--surface);
+    box-shadow: inset 0 -1px 0 var(--border);
+  }
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+  h1 { font-size: 20px; font-weight: 600; margin: 0; }
+  h1 .name { color: var(--accent); }
+  .toolbar {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .toolbar input[type=text] {
+    padding: 8px 12px;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 13px;
+    outline: none;
+    min-width: 220px;
+  }
+  .toolbar input[type=text]:focus { border-color: var(--accent); }
+  .toolbar select {
+    padding: 8px 12px;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 13px;
+    outline: none;
+  }
+  .btn {
+    padding: 8px 14px;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text2);
+    font-family: inherit;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .btn:hover { border-color: var(--accent); color: var(--accent); }
+  .filter-btn {
+    padding: 8px 14px;
+    border-radius: 6px;
+    font-family: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text2);
+    user-select: none;
+  }
+  .filter-btn.allow.on  { border-color: var(--green); color: var(--green); background: rgba(34,197,94,0.08); }
+  .filter-btn.allow.off { opacity: 0.55; }
+  .filter-btn.block.on  { border-color: var(--red);   color: var(--red);   background: rgba(248,113,113,0.08); }
+  .filter-btn.block.off { opacity: 0.55; }
+  .filter-btn.live.on   { border-color: var(--accent); color: var(--accent); background: var(--accent-glow); }
+  .filter-btn.live.off  { opacity: 0.55; }
+  @keyframes live-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+  .filter-btn.live.on::first-letter { animation: live-pulse 1.4s ease-in-out infinite; }
+  .dedup-stepper { display: inline-flex; align-items: stretch; gap: 0; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .dedup-stepper .dedup-btn { padding: 6px 10px; background: var(--bg2); border: 0; border-radius: 0; color: var(--text); font-size: 14px; line-height: 1; min-width: 32px; cursor: pointer; }
+  .dedup-stepper .dedup-btn:hover:not(:disabled) { color: var(--accent); }
+  .dedup-stepper .dedup-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+  .dedup-stepper .dedup-label { padding: 6px 12px; background: var(--bg2); color: var(--text2); font-size: 13px; white-space: nowrap; border-left: 1px solid var(--border); border-right: 1px solid var(--border); }
+  .dedup-stepper .dedup-label #dedupWinVal { color: var(--accent); font-weight: 600; }
+  .stats {
+    color: var(--text3);
+    font-size: 12px;
+  }
+  /* Рамка и скругление — у .logs-scroll: overflow:hidden на самой таблице
+     сломал бы закрепление названий столбцов. */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  thead {
+    background: var(--surface);
+    color: var(--text2);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  th, td {
+    padding: 9px 12px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+    word-break: break-word;
+  }
+  tr:last-child td { border-bottom: none; }
+  tbody tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
+  tr:hover td { background: var(--surface2) !important; }
+  td.mono { font-family: 'JetBrains Mono', 'Consolas', monospace; }
+  td.dim { color: var(--text3); }
+  td.host { color: var(--accent); }
+  td.action.allow { color: var(--green); font-weight: 500; }
+  td.action.block { color: var(--red); font-weight: 500; }
+  td.action.error { color: var(--orange); font-weight: 500; white-space: nowrap; }
+  td.action .why { color: var(--text3); font-weight: 400; }
+  .empty {
+    padding: 60px 24px;
+    text-align: center;
+    color: var(--text3);
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  .empty.error { color: var(--red); }
+  .badge-cc {
+    display: inline-block;
+    padding: 1px 6px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: 11px;
+    color: var(--text2);
+    margin-right: 6px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .auth-banner {
+    background: var(--accent-glow);
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    padding: 14px 18px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+    font-size: 13px;
+  }
+  .auth-banner a { color: var(--accent); }
+  @media (max-width: 720px) {
+    .wrap { padding: 14px; }
+    table { font-size: 12px; }
+    th, td { padding: 7px 8px; white-space: nowrap; }
+    .toolbar input[type=text] { min-width: 0; flex: 1; }
+    /* На телефоне строки не переносятся — таблица шире экрана и едет вбок. */
+    .logs-scroll table { min-width: max-content; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+<div class="logs-head">
+  <header>
+    <h1 id="pageTitle">Логи <span id="clientName" class="name">—</span></h1>
+    <div class="toolbar">
+      <button class="filter-btn allow on" id="btnAllow" onclick="toggleAllow()">Allow</button>
+      <button class="filter-btn block on" id="btnBlock" onclick="toggleBlock()">Block</button>
+      <button class="filter-btn live off" id="btnLive" onclick="toggleLive()">● Live</button>
+      <div class="dedup-stepper" title="Окно дедупликации — одинаковые записи в пределах окна сворачиваются в одну">
+        <button type="button" class="btn dedup-btn" id="dedupMinus" onclick="stepDedup(-1)" aria-label="Меньше">−</button>
+        <span class="dedup-label">Дедуп · <span id="dedupWinVal">12 часов</span></span>
+        <button type="button" class="btn dedup-btn" id="dedupPlus" onclick="stepDedup(1)" aria-label="Больше">+</button>
+      </div>
+      <input type="text" id="filter" placeholder="Поиск (IP, хост, страна, email…)">
+      <select id="limit">
+        <option value="200">последние 200</option>
+        <option value="500" selected>500</option>
+        <option value="1000">1000</option>
+        <option value="2000">2000</option>
+        <option value="5000">5000</option>
+      </select>
+      <button class="btn" onclick="reload()">Обновить</button>
+    </div>
+  </header>
+  <div class="stats" id="stats"></div>
+</div>
+  <div id="content"></div>
+</div>
+
+<script>
+const params = new URLSearchParams(window.location.search);
+const uuid = params.get('uuid');
+const isGlobal = params.get('global') === '1';
+const awgPubkey = params.get('awg') || '';
+const isAwg = !!awgPubkey;
+// Hysteria: ?hy=<id клиента> или ?hy=global (все клиенты протокола).
+const hyId = params.get('hy') || '';
+const isHy = !!hyId;
+const isHyGlobal = hyId === 'global';
+let _records = [];
+let _showAllow = true;
+let _showBlock = true;
+let _dedupWinMin = 720;
+let _live = false;  // живой режим включают сами — кнопкой Live
+let _liveTimer = null;
+const LIVE_INTERVAL_MS = 2000;
+
+function escHtml(s) {
+  if (s == null) return '';
+  return String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function ccFlag(cc) {
+  if (!cc || cc.length !== 2) return '';
+  const codePoints = [...cc.toUpperCase()].map(c => 0x1F1A5 + c.charCodeAt(0));
+  return String.fromCodePoint(...codePoints);
+}
+
+function fmtTs(ts) {
+  if (!ts || typeof ts !== 'string') return '';
+  // Формат панели: DD.MM.YYYY HH:MM:SS (секунды — если они есть в записи).
+  const m = ts.match(/^(\d{4})[-\/](\d{2})[-\/](\d{2})[ T](\d{2}:\d{2}(?::\d{2})?)/);
+  return m ? `${m[3]}.${m[2]}.${m[1]} ${m[4]}` : ts;
+}
+
+// Hysteria пишет «error», когда проксируемое соединение закончилось ошибкой —
+// это не блокировка. Причина одним словом в той же строке («error · lost»),
+// полный текст — в подсказке. По-английски: перевода не требует.
+const ERR_REASONS = [
+  [/canceled by (remote|local)|context canceled|closed by|use of closed|transport closed|application error 0x0/i, 'closed'],
+  [/(^|: )EOF$/, 'closed'],
+  [/server closed/i, 'restart'],
+  [/no recent network activity|idle timeout/i, 'lost'],
+  [/timeout|timed out|deadline exceeded/i, 'timeout'],
+  [/connection refused/i, 'refused'],
+  [/connection reset|broken pipe/i, 'reset'],
+  [/no such host|server misbehaving|lookup /i, 'no dns'],
+  [/network is unreachable|no route to host|host is unreachable/i, 'no route'],
+];
+function errReason(e) {
+  for (const [re, word] of ERR_REASONS) if (re.test(e)) return word;
+  return '';
+}
+
+function isBlock(rec) {
+  return (rec.outbound || '').toLowerCase() === 'block';
+}
+
+function toggleAllow() {
+  _showAllow = !_showAllow;
+  document.getElementById('btnAllow').classList.toggle('on', _showAllow);
+  document.getElementById('btnAllow').classList.toggle('off', !_showAllow);
+  render();
+}
+
+function toggleBlock() {
+  _showBlock = !_showBlock;
+  document.getElementById('btnBlock').classList.toggle('on', _showBlock);
+  document.getElementById('btnBlock').classList.toggle('off', !_showBlock);
+  render();
+}
+
+const DEDUP_STEPS = [0, 15, 60, 180, 720, 1440];
+const DEDUP_LABELS = ['выкл', '15 мин', '1 час', '3 часа', '12 часов', '24 часа'];
+const DEDUP_LABELS_EN = ['off', '15 min', '1 hour', '3 hours', '12 hours', '24 hours'];
+function _en() { return !!(window.i18nLang && window.i18nLang() === 'en'); }
+
+function _dedupLabel(min) {
+  const i = DEDUP_STEPS.indexOf(min);
+  const L = _en() ? DEDUP_LABELS_EN : DEDUP_LABELS;
+  return i >= 0 ? L[i] : (min + (_en() ? ' min' : ' мин'));
+}
+
+function stepDedup(dir) {
+  const i = DEDUP_STEPS.indexOf(_dedupWinMin);
+  const ni = Math.max(0, Math.min(DEDUP_STEPS.length - 1, (i < 0 ? 4 : i) + dir));
+  _dedupWinMin = DEDUP_STEPS[ni];
+  document.getElementById('dedupWinVal').textContent = (_en() ? DEDUP_LABELS_EN : DEDUP_LABELS)[ni];
+  document.getElementById('dedupMinus').disabled = (ni === 0);
+  document.getElementById('dedupPlus').disabled = (ni === DEDUP_STEPS.length - 1);
+  // Дедуп влияет на сколько сырых строк нужно — перезапрашиваем.
+  reload({silent: true});
+}
+
+function _dedupKey(r) {
+  return [r.outbound, r.email, r.ip, r.host, r.port, r.inbound].join('|');
+}
+
+function _tsToMs(s) {
+  if (!s || typeof s !== 'string') return 0;
+  const m = s.match(/^(\d{4})[-\/](\d{2})[-\/](\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
+  return m ? Date.UTC(+m[1], +m[2]-1, +m[3], +m[4], +m[5], +m[6]) : 0;
+}
+
+function toggleLive() {
+  _live = !_live;
+  document.getElementById('btnLive').classList.toggle('on', _live);
+  document.getElementById('btnLive').classList.toggle('off', !_live);
+  if (_live) startLive(); else stopLive();
+}
+
+function startLive() {
+  stopLive();
+  _liveTimer = setInterval(() => { if (!document.hidden) reload({silent: true}); }, LIVE_INTERVAL_MS);
+}
+
+function stopLive() {
+  if (_liveTimer) { clearInterval(_liveTimer); _liveTimer = null; }
+}
+
+function _buildUrl(serverLimit) {
+  if (isHyGlobal) return '/api/hysteria/logs?limit=' + serverLimit;
+  if (isHy) return '/api/hysteria/clients/' + encodeURIComponent(hyId) + '/logs?limit=' + serverLimit;
+  if (isGlobal) return '/api/xray/global/logs?limit=' + serverLimit;
+  if (awgPubkey) return '/api/awg/logs?pubkey=' + encodeURIComponent(awgPubkey) + '&limit=' + serverLimit;
+  if (uuid) return '/api/xray/clients/' + encodeURIComponent(uuid) + '/logs?limit=' + serverLimit;
+  return null;
+}
+
+// Дедуп без mutation. Возвращает массив групп (newest-first).
+function _applyDedup(rows, winMin) {
+  if (winMin <= 0 || rows.length <= 1) return rows.map(r => Object.assign({}, r, {_count: 1}));
+  const windowMs = winMin * 60 * 1000;
+  const lastGroupByKey = new Map();
+  const groups = [];
+  for (const r of rows) {
+    const k = _dedupKey(r);
+    const g = lastGroupByKey.get(k);
+    const tMs = _tsToMs(r.ts);
+    if (g && (g._oldestMs - tMs) <= windowMs) {
+      g._count++;
+      g._oldestMs = tMs;
+    } else {
+      const ng = Object.assign({}, r, {_count: 1, _oldestMs: tMs});
+      groups.push(ng);
+      lastGroupByKey.set(k, ng);
+    }
+  }
+  return groups;
+}
+
+async function reload(opts) {
+  opts = opts || {};
+  const limit = parseInt(document.getElementById('limit').value, 10) || 500;
+  if (!opts.silent) {
+    document.getElementById('content').innerHTML = '<div class="empty">Загружаем…</div>';
+  }
+  const url0 = _buildUrl(limit);
+  if (!url0) {
+    document.getElementById('content').innerHTML =
+      '<div class="empty error">Не указан uuid, awg, hy или global=1 в URL.</div>';
+    return;
+  }
+  try {
+    // Итеративно докачиваем сырые строки пока после дедупа+фильтра не наберём limit групп
+    // (или сервер не вернёт меньше чем просили — значит, лог кончился).
+    const MAX_SERVER_LIMIT = 100000;
+    let serverLimit = _dedupWinMin > 0 ? Math.min(MAX_SERVER_LIMIT, limit * 3) : limit;
+    let data = null;
+    let attempt = 0;
+    while (true) {
+      attempt++;
+      const url = _buildUrl(serverLimit);
+      const res = await fetch(url, {credentials: 'same-origin'});
+      if (res.status === 401) {
+        document.getElementById('content').innerHTML =
+          '<div class="auth-banner">Не авторизован. <a href="/" target="_blank">Откройте панель</a> и войдите, затем нажмите «Обновить».</div>';
+        return;
+      }
+      if (!res.ok) {
+        document.getElementById('content').innerHTML =
+          '<div class="empty error">Ошибка ' + res.status + '</div>';
+        return;
+      }
+      data = await res.json();
+      if (!data.access_log_enabled) break;
+      const recs = data.records || [];
+      const dedupedCount = _applyDedup(recs, _dedupWinMin).length;
+      const hitEnd = recs.length < serverLimit;
+      if (dedupedCount >= limit || hitEnd || serverLimit >= MAX_SERVER_LIMIT) break;
+      serverLimit = Math.min(MAX_SERVER_LIMIT, serverLimit * 2);
+    }
+    if (isHyGlobal) {
+      document.getElementById('clientName').textContent = '(все клиенты Hysteria)';
+      document.title = 'Логи Hysteria — Панель byFox.dev';
+    } else if (isHy) {
+      document.getElementById('clientName').textContent = (data.name || '—') + ' [Hysteria]';
+      document.title = 'Логи Hysteria: ' + (data.name || hyId.slice(0, 8)) + ' — Панель byFox.dev';
+    } else if (isGlobal) {
+      document.getElementById('clientName').textContent = '(все клиенты VLESS)';
+      document.title = 'Логи Global rules — Панель byFox.dev';
+    } else if (awgPubkey) {
+      document.getElementById('clientName').textContent = (data.name || '—') + ' [AWG]';
+      document.title = 'Логи AWG: ' + (data.name || awgPubkey.slice(0,12)) + ' — Панель byFox.dev';
+    } else {
+      document.getElementById('clientName').textContent = data.name || '—';
+      document.title = 'Логи: ' + (data.name || uuid) + ' — Панель byFox.dev';
+    }
+    if (!data.access_log_enabled) {
+      document.getElementById('content').innerHTML = isHy
+        ? '<div class="empty">Журнал Hysteria не включён. На главной странице → Hysteria → ⚙ → тумблер <b>«Журнал назначений»</b>. Адреса запросов hysteria пишет только на уровне debug, поэтому тумблер перезапускает сервис.</div>'
+        : '<div class="empty">Access-log XRay не включён. На главной странице → XRay → ⚙ → «Журнал подключений».</div>';
+      document.getElementById('stats').textContent = '';
+      return;
+    }
+    _records = data.records || [];
+    render();
+  } catch (e) {
+    console.error(e);
+    document.getElementById('content').innerHTML =
+      '<div class="empty error">Не удалось загрузить логи: ' + escHtml(e.message) + '</div>';
+  }
+}
+
+function render() {
+  const limit = parseInt(document.getElementById('limit').value, 10) || 500;
+  const filter = document.getElementById('filter').value.trim().toLowerCase();
+  let rows = _records.filter(r => {
+    const blk = isBlock(r);
+    if (blk && !_showBlock) return false;
+    if (!blk && !_showAllow) return false;
+    if (!filter) return true;
+    const haystack = [
+      r.ip, r.host, r.email, r.outbound, r.inbound,
+      r.geo && r.geo.country, r.geo && r.geo.city, r.geo && r.geo.org,
+      r.geo && r.geo.cc,
+      r.dest_org && r.dest_org.org
+    ].filter(Boolean).join(' ').toLowerCase();
+    return haystack.includes(filter);
+  });
+  rows = _applyDedup(rows, _dedupWinMin);
+  // Режем до limit — пользователь выбрал именно столько строк на экране.
+  if (rows.length > limit) rows = rows.slice(0, limit);
+  const totalAllow = rows.filter(r => !isBlock(r)).length;
+  const totalBlock = rows.length - totalAllow;
+  // Сколько сырых строк реально схлопнулось в показанные.
+  const rawInShown = rows.reduce((s, r) => s + (r._count || 1), 0);
+  document.getElementById('stats').textContent = _en()
+    ? ('Entries: ' + rows.length +
+        (_dedupWinMin > 0 && rawInShown > rows.length ? ' (collapsed from ' + rawInShown + ' raw, window ' + _dedupLabel(_dedupWinMin) + ')' : '') +
+        '  ·  Allow: ' + totalAllow + '  ·  Block: ' + totalBlock)
+    : ('Записей: ' + rows.length +
+        (_dedupWinMin > 0 && rawInShown > rows.length ? ' (свёрнуто из ' + rawInShown + ' сырых, окно ' + _dedupLabel(_dedupWinMin) + ')' : '') +
+        '  ·  Allow: ' + totalAllow + '  ·  Block: ' + totalBlock);
+  if (!rows.length) {
+    document.getElementById('content').innerHTML =
+      '<div class="empty">Записей нет.</div>';
+    return;
+  }
+  const showEmail = isGlobal || isHyGlobal;
+  const html = `
+    <div class="logs-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th style="white-space:nowrap;">Время</th>
+          <th>Действие</th>
+          ${showEmail ? '<th>Клиент</th>' : ''}
+          <th>IP клиента</th>
+          <th>Страна / город</th>
+          <th>Провайдер (ASN)</th>
+          <th>Орг назначения</th>
+          <th>Хост назначения</th>
+          <th style="text-align:right;">Порт</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows.map(r => {
+          const geo = r.geo || {};
+          const flag = ccFlag(geo.cc);
+          const place = [geo.country, geo.city].filter(Boolean).join(', ');
+          const asn = geo.org ? (geo.asn ? `${escHtml(geo.org)} <span class="dim">(AS${escHtml(geo.asn)})</span>` : escHtml(geo.org)) : '';
+          const dest = r.dest_org || {};
+          const destOrg = dest.org ? (dest.asn ? `${escHtml(dest.org)} <span class="dim">(AS${escHtml(dest.asn)})</span>` : escHtml(dest.org)) : '';
+          const blk = isBlock(r);
+          const isErr = (r.outbound || '').toLowerCase() === 'error';
+          const why = (isErr && r.err) ? errReason(r.err) : '';
+          const actionCell = `<td class="action ${blk ? 'block' : (isErr ? 'error' : 'allow')} mono"${r.err ? ` title="${escHtml(r.err)}"` : ''}>${escHtml(r.outbound || '—')}${why ? `<span class="why"> · ${escHtml(why)}</span>` : ''}</td>`;
+          return `
+          <tr>
+            <td class="mono dim" style="white-space:nowrap;">${escHtml(fmtTs(r.ts))}${r._count > 1 ? ` <span style="color:var(--accent);font-weight:600;">×&nbsp;${r._count}</span>` : ''}</td>
+            ${actionCell}
+            ${showEmail ? `<td class="mono dim">${escHtml(r.email || '')}</td>` : ''}
+            <td class="mono" style="white-space:nowrap;">${escHtml(r.ip || '')}</td>
+            <td>${escHtml(place) || '<span class="dim">—</span>'}</td>
+            <td>${asn || '<span class="dim">—</span>'}</td>
+            <td>${destOrg || '<span class="dim">—</span>'}</td>
+            <td class="host">${escHtml(r.host || '')}</td>
+            <td class="mono dim" style="text-align:right;">${r.port || ''}</td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>
+    </div>`;
+  setTableHtml(html);
+}
+
+// Живой лог перерисовывает таблицу целиком — новая обёртка .logs-scroll
+// родилась бы с прокруткой 0, и таблица прыгала бы в начало посреди чтения.
+// Запоминаем прокрутку (таблица прокручивается сама, в обе стороны) и
+// возвращаем её после перерисовки.
+function setTableHtml(html) {
+  const box = document.getElementById('content');
+  const old = box.querySelector('.logs-scroll');
+  const sl = old ? old.scrollLeft : 0, st = old ? old.scrollTop : 0;
+  box.innerHTML = html;
+  const sc = box.querySelector('.logs-scroll');
+  if (sc) { sc.scrollLeft = sl; sc.scrollTop = st; }
+}
+
+// iOS до 16 не знает overscroll-behavior: таблица логов всё равно пружинила
+// бы от краёв (сверху — отрываясь от названий столбцов). Если таблица уже
+// упёрлась в край, а палец тянет дальше, гасим этот шаг жеста.
+(function () {
+  const box = document.getElementById('content');
+  let x0 = 0, y0 = 0;
+  box.addEventListener('touchstart', e => {
+    const t = e.touches[0];
+    x0 = t.clientX; y0 = t.clientY;
+  }, {passive: true});
+  box.addEventListener('touchmove', e => {
+    const sc = e.target.closest && e.target.closest('.logs-scroll');
+    if (!sc || e.touches.length !== 1) return;
+    const t = e.touches[0];
+    const dx = t.clientX - x0, dy = t.clientY - y0;
+    x0 = t.clientX; y0 = t.clientY;
+    let stop;
+    if (Math.abs(dy) >= Math.abs(dx)) {
+      stop = (dy > 0 && sc.scrollTop <= 0) ||
+             (dy < 0 && sc.scrollTop + sc.clientHeight >= sc.scrollHeight - 1);
+    } else {
+      stop = (dx > 0 && sc.scrollLeft <= 0) ||
+             (dx < 0 && sc.scrollLeft + sc.clientWidth >= sc.scrollWidth - 1);
+    }
+    if (stop && e.cancelable) e.preventDefault();
+  }, {passive: false});
+})();
+
+document.getElementById('filter').addEventListener('input', render);
+document.getElementById('limit').addEventListener('change', reload);
+stepDedup(0); // initial disabled state for stepper buttons
+
+if (isGlobal) {
+  document.getElementById('pageTitle').firstChild.textContent = 'Логи Global rules ';
+} else if (isHy) {
+  document.getElementById('pageTitle').firstChild.textContent = 'Логи Hysteria ';
+}
+
+document.addEventListener('visibilitychange', () => {
+  // Если вкладку свернули — таймер всё равно крутится, просто пропускаем reload (см. стартLive).
+  // А когда вкладку развернули — сразу подтянем свежее.
+  if (!document.hidden && _live) reload({silent: true});
+});
+
+reload();
+if (_live) startLive();
+</script>
+<script src="/static/i18n-dict.js"></script>
+<script src="/static/i18n.js"></script>
+</body>
+</html>
