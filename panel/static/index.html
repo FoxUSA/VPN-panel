@@ -1452,6 +1452,43 @@ body::before {
 }
 #ruleListManagerModal input.rml-search:focus { border-color: var(--accent); }
 .rml-search::-webkit-search-cancel-button { filter: invert(0.6); cursor: pointer; }
+/* «Домен или IP» стоит перед «Поиском» и забирает отступ слева себе. */
+#ruleListManagerModal input.rml-lookup { width: 150px; }
+#ruleListManagerModal input#rmSearch { margin-left: 0; }
+.rml-lookup-btn svg { width: 16px; height: 16px; }
+.rml-lookup-btn.busy svg { animation: rml-spin 1s linear infinite; }
+@keyframes rml-spin { to { transform: rotate(360deg); } }
+.rml-lk {
+  position: relative;
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 13px;
+}
+.rml-lk-close { position: absolute; top: 8px; right: 8px; }
+.rml-lk-head { font-weight: 600; margin-right: 34px; word-break: break-all; }
+.rml-lk-ips { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 6px 0 2px; color: var(--text2); font-size: 12px; }
+.rml-lk-ips code { font-family: 'JetBrains Mono', monospace; color: var(--text); }
+.rml-lk-note { color: var(--text3); font-size: 12px; margin-top: 4px; }
+.rml-lk-sec { margin-top: 12px; }
+.rml-lk-sec-title { font-size: 11px; color: var(--text3); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
+.rml-lk-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 6px 0; border-top: 1px solid var(--border); }
+.rml-lk-row:first-of-type { border-top: 0; }
+.rml-lk-name { font-weight: 600; cursor: pointer; }
+.rml-lk-name:hover { color: var(--accent); }
+.rml-lk-num { color: var(--text3); font-variant-numeric: tabular-nums; min-width: 22px; }
+.rml-lk-pol { font-size: 11px; padding: 1px 8px; border-radius: 6px; border: 1px solid var(--border2); }
+.rml-lk-pol.p-direct { color: var(--text2); }
+.rml-lk-pol.p-reject { color: var(--red); border-color: var(--red); }
+.rml-lk-pol.p-proxy { color: var(--accent); border-color: var(--accent); }
+.rml-lk-first { font-size: 11px; color: var(--green); }
+.rml-lk-rules { flex-basis: 100%; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text2); word-break: break-all; }
+.rml-lk-rules .why { font-family: 'Outfit', sans-serif; color: var(--text3); word-break: normal; overflow-wrap: anywhere; }
+.rml-lk-add { margin-left: auto; }
+.rml-lk-empty { color: var(--text3); }
+.rule-mgr-card.rml-flash { outline: 2px solid var(--accent); outline-offset: 2px; transition: outline-color 0.6s; }
 /* Два столбца, а не три: в три колонки название + номер + стрелки + иконки не
    помещались и карточка расползалась на три строки. */
 .rml-compact {
@@ -1838,6 +1875,79 @@ body::before {
 .health-footer { margin-top: 12px; font-size: 12px; color: var(--text3); text-align: center; }
 @media (max-width: 720px) { .health-grid { grid-template-columns: 1fr; grid-auto-rows: auto; } }
 
+/* История нагрузки — графики за период под live-карточками. */
+.health-scroll { max-height: 62vh; overflow-y: auto; overflow-x: hidden; padding-right: 4px; }
+.hh-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin: 20px 0 4px; }
+.hh-title { font-size: 15px; font-weight: 600; color: var(--text); }
+.hh-seg { display: inline-flex; gap: 2px; padding: 3px; background: var(--bg); border: 1px solid var(--border2); border-radius: 10px; }
+.hh-seg button { border: 0; background: transparent; color: var(--text2); font: inherit; font-size: 13px; font-weight: 600; padding: 6px 12px; border-radius: 7px; cursor: pointer; white-space: nowrap; user-select: none; -webkit-user-select: none; }
+.hh-seg button:hover { color: var(--text); }
+.hh-seg button.active { background: var(--accent); color: #0a1224; }
+.hh-note { font-size: 12px; color: var(--text3); margin-bottom: 12px; }
+.hh-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.hh-card { min-width: 0; display: flex; flex-direction: column; }
+.hh-card .hh-legend { margin-top: auto; }   /* графики соседних карточек — на одной линии */
+.hh-iface { font-weight: 400; color: var(--text3); }
+.hh-card .health-card-title { margin-bottom: 4px; }
+.hh-sub { margin-top: 0; line-height: 1.5; }
+.hh-empty { grid-column: 1 / -1; padding: 6px 0; }
+.hh-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin: 10px 0 8px; }
+.hh-stats-n { font-size: 12px; font-weight: 600; color: var(--text2); margin-top: 10px; }
+.hh-stats-n + .hh-stats { margin-top: 4px; }
+.hh-ms { background: var(--bg2); border: 1px solid var(--border); border-radius: 7px; padding: 6px 8px; min-width: 0; }
+.hh-ms-l, .hh-ms-v, .hh-ms-d { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hh-ms-l { font-size: 10.5px; color: var(--text3); text-transform: uppercase; letter-spacing: .3px; }
+.hh-ms-v { font-size: 14px; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
+.hh-ms-d { font-size: 11px; color: var(--text3); }
+.hh-ms-d.up { color: var(--orange); }
+.hh-ms-d.down { color: var(--green); }
+.hh-legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 11.5px; color: var(--text2); margin-bottom: 2px; }
+.hh-legend i { display: inline-block; width: 14px; height: 0; border-top: 2px solid; vertical-align: middle; margin-right: 5px; }
+.hh-legend i.dash { border-top-style: dashed; }
+.hh-chart { position: relative; height: 140px; touch-action: pan-y; }
+.hh-chart svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.hh-chart .hh-ax { fill: var(--text3); font-size: 10.5px; font-family: inherit; }
+.hh-chart .hh-grid-l { stroke: var(--border); stroke-width: 1; }
+.hh-chart .hh-xh { stroke: var(--border2); stroke-width: 1; }
+.hh-chart .hh-mark { stroke: var(--bg); stroke-width: 2; }
+.hh-chart .hh-nodata { fill: var(--text3); font-size: 12px; }
+.hh-chart .hh-ref { stroke: var(--orange); stroke-width: 1; stroke-dasharray: 4 4; stroke-opacity: .6; }
+.hh-tip { position: absolute; top: 4px; max-width: 100%; pointer-events: none; background: var(--bg2); border: 1px solid var(--border2); border-radius: 8px; padding: 6px 9px; font-size: 12px; line-height: 1.45; box-shadow: 0 6px 18px rgba(0,0,0,.4); z-index: 2; }
+.hh-tip[hidden] { display: none; }
+.hh-tip-t { color: var(--text3); margin-bottom: 2px; white-space: nowrap; }
+/* Пик переносится под значение, когда строка не влезает в ширину графика. */
+.hh-tip-r { display: flex; flex-wrap: wrap; align-items: center; column-gap: 6px; color: var(--text); }
+.hh-tip-r > span { white-space: nowrap; }
+.hh-tip-r i { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+.hh-tip-r b { font-weight: 600; margin-left: auto; padding-left: 10px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.hh-tip-r .hh-tip-pk { color: var(--text3); font-weight: 400; margin-left: auto; padding-left: 8px; }
+.hh-rec { grid-column: 1 / -1; }
+.hh-rec-row { display: flex; align-items: baseline; gap: 10px; padding: 5px 0; border-top: 1px solid var(--border); font-size: 13px; }
+.hh-rec-row:first-of-type { border-top: none; }
+.hh-rec-l { flex: 1 1 auto; min-width: 0; color: var(--text2); }
+.hh-rec-v { font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.hh-rec-t { flex: 0 0 auto; color: var(--text3); font-size: 12px; white-space: nowrap; }
+
+/* Вкладка «Мониторинг»: реквизиты сервера. */
+.probe-row { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-top: 1px solid var(--border); }
+.probe-l { flex: 0 0 150px; color: var(--text3); font-size: 12px; }
+.probe-v { flex: 1 1 auto; min-width: 0; }
+.probe-val { font-family: 'JetBrains Mono', monospace; font-size: 13px; color: var(--text); overflow-wrap: anywhere; user-select: all; -webkit-user-select: all; }
+.probe-h { font-size: 11px; color: var(--text3); margin-top: 2px; line-height: 1.4; }
+.probe-row .btn { flex: 0 0 auto; }
+
+@media (max-width: 720px) {
+  .hh-grid { grid-template-columns: minmax(0, 1fr); }
+  .hh-seg { display: flex; width: 100%; }
+  .hh-seg button { flex: 1 1 0; padding: 7px 2px; font-size: 12.5px; }
+}
+@media (max-width: 560px) {
+  /* Подпись — строкой сверху, значение и «Копировать» — под ней: в три колонки
+     на телефоне значение сжималось до столбика по 8 букв. */
+  .probe-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 10px; row-gap: 3px; padding: 10px 0; }
+  .probe-l { grid-column: 1 / -1; }
+}
+
 /* System paths modal — group headers */
 .sys-path-group { margin-bottom: 16px; }
 .sys-path-group-head {
@@ -1878,17 +1988,59 @@ body::before {
 .btn:disabled, .btn[disabled] {
   opacity: 0.4; cursor: not-allowed; pointer-events: none;
 }
-.tpl-cell {
-  width: 100%;
-  text-align: center;
-  padding: 8px 10px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  display: block;
+#tplList {
+  max-height: 60vh; overflow-y: auto; display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 2px;
 }
-@media (max-width: 480px) {
-  #tplList { grid-template-columns: repeat(2, 1fr) !important; }
+.tpl-item {
+  display: flex; align-items: center; min-width: 0;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--bg);
+  transition: border-color .15s;
+}
+.tpl-item:hover, .tpl-item:focus-within { border-color: var(--accent); }
+.tpl-cell {
+  flex: 1; min-width: 0; align-self: stretch;
+  display: flex; flex-direction: column; justify-content: center; gap: 4px;
+  padding: 10px 12px; text-align: left;
+  background: none; border: 0; color: var(--text); font: inherit; cursor: pointer;
+}
+.tpl-cell:focus-visible { outline: none; }
+.tpl-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.tpl-name { flex: 1; min-width: 0; font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tpl-cat {
+  flex-shrink: 0; font-size: 11px; padding: 2px 7px; border-radius: 6px;
+  background: var(--border); color: var(--text2); white-space: nowrap;
+}
+.tpl-hit { font-size: 11px; color: var(--accent); font-family: 'JetBrains Mono', monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tpl-sub {
+  font-size: 12px; line-height: 1.4; color: var(--text3);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.tpl-info {
+  flex-shrink: 0; align-self: center; margin-right: 10px;
+  width: 38px; height: 38px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border2, var(--border)); border-radius: 8px;
+  background: var(--surface, transparent); color: var(--text);
+  cursor: pointer; transition: color .15s, border-color .15s;
+}
+.tpl-info:hover, .tpl-info:focus-visible { color: var(--accent); border-color: var(--accent); outline: none; }
+.tpl-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 14px; }
+.tpl-count { font-size: 12px; color: var(--text3); }
+.tpl-info-modal { width: 560px; }
+.tpl-info-head { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; margin: -12px 0 14px; font-size: 12px; color: var(--text3); }
+.tpl-info-head code { font-size: 12px; color: var(--text2); }
+.tpl-info-desc { font-size: 14px; line-height: 1.55; color: var(--text); }
+.tpl-info-sec { margin-top: 16px; }
+.tpl-info-sec-t { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text3); margin-bottom: 6px; }
+.tpl-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.tpl-chip { font-size: 12px; padding: 3px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text2); }
+.tpl-chip b { color: var(--text); font-weight: 600; }
+code.tpl-chip, .tpl-info-head code { font-family: 'JetBrains Mono', monospace; }
+.tpl-info-note { font-size: 12px; line-height: 1.5; color: var(--text3); margin-top: 14px; }
+.tpl-info-body a { color: var(--accent); word-break: break-all; }
+@media (max-width: 640px) {
+  #tplList { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* Audit strip */
@@ -4040,10 +4192,13 @@ input[type="date"] { font-family: 'JetBrains Mono', monospace; letter-spacing: 0
         <button type="button" class="rml-plat-btn active" data-plat="clash" onclick="setRmUrlPlatform('clash')">Clash</button>
         <button type="button" class="rml-plat-btn" data-plat="loon" onclick="setRmUrlPlatform('loon')">Loon</button>
         <button type="button" class="rml-plat-btn" data-plat="shadowrocket" onclick="setRmUrlPlatform('shadowrocket')">Shadowrocket</button>
+        <input type="search" id="rmLookup" class="rml-search rml-lookup" placeholder="Домен или IP" title="В какие списки и шаблоны попадает домен или IP (Enter)" autocomplete="off" onkeydown="if (event.key === 'Enter') runRuleLookup()" oninput="onRmLookupInput(this.value)">
+        <button type="button" id="rmLookupBtn" class="btn-collapse rml-lookup-btn" onclick="runRuleLookup()" title="Где домен: в какие списки и шаблоны попадает" aria-label="Где домен: в какие списки и шаблоны попадает"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18"/></svg></button>
         <input type="search" id="rmSearch" class="rml-search" placeholder="Поиск" autocomplete="off" oninput="onRmSearch(this.value)">
         <button type="button" id="rmSortBtn" class="btn-collapse rml-sort-btn" onclick="toggleRmSort()" title="Сортировка: по приоритету" aria-label="Сортировка: по приоритету"></button>
         <button type="button" id="rmCompactBtn" class="btn-collapse rml-compact-btn" onclick="toggleRmCompact('lists')" title="Свернуть" aria-label="Свернуть"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></button>
       </div>
+      <div id="rmLookupRes" class="rml-lk hidden"></div>
       <div id="ruleListBodyLists"></div>
       <div class="rule-mgr-add" style="grid-template-columns:1fr;gap:10px;">
         <div style="font-size:12px;color:var(--text3);text-transform:uppercase;letter-spacing:0.05em;">Добавить новый список</div>
@@ -4116,15 +4271,28 @@ input[type="date"] { font-family: 'JetBrains Mono', monospace; letter-spacing: 0
 
 <!-- Templates picker modal -->
 <div id="templatePickerModal" class="modal-overlay hidden">
-  <div class="modal">
+  <div class="modal modal-xwide">
     <h2 id="tplModalTitle">Шаблоны</h2>
     <p style="color:var(--text3);font-size:12px;margin-bottom:12px;">
-      Готовые правила из <a href="https://github.com/blackmatrix7/ios_rule_script" target="_blank" rel="noopener" style="color:var(--accent);">blackmatrix7/ios_rule_script</a>. Содержимое файлов обновляется в репозитории — клиент подтянет свежую версию автоматически.
+      Готовые списки сайтов и IP для сервисов: зеркало <a href="https://github.com/blackmatrix7/ios_rule_script" target="_blank" rel="noopener" style="color:var(--accent);">blackmatrix7</a> и шаблоны byFox на <a href="https://api.byfox.dev/rule/" target="_blank" rel="noopener" style="color:var(--accent);">api.byfox.dev</a>. Списки обновляются сами. Нажмите «?», чтобы прочитать, что входит в шаблон.
     </p>
-    <input type="text" id="tplSearch" placeholder="Поиск по названию…" oninput="_renderTemplates()" style="margin-bottom:12px;width:100%;">
-    <div id="tplList" style="max-height:50vh;overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:6px;padding:4px 2px;"></div>
-    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">
+    <input type="text" id="tplSearch" placeholder="Название, описание, домен или IP…" title="Например: imessage, нейросети, meta.com" oninput="_renderTemplates()" style="margin-bottom:12px;width:100%;">
+    <div id="tplList"></div>
+    <div class="tpl-foot">
+      <span class="tpl-count" id="tplCount"></span>
       <button class="btn btn-sm btn-ghost" onclick="closeModal('templatePickerModal')">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<!-- Описание шаблона (кнопка «?» в пикере) -->
+<div id="tplInfoModal" class="modal-overlay hidden">
+  <div class="modal tpl-info-modal">
+    <h2 id="tplInfoTitle">Шаблон</h2>
+    <div id="tplInfoBody"></div>
+    <div class="modal-actions">
+      <button class="btn btn-sm btn-ghost" onclick="closeModal('tplInfoModal')">Закрыть</button>
+      <button class="btn btn-sm btn-primary" id="tplInfoAdd">Добавить</button>
     </div>
   </div>
 </div>
@@ -4177,10 +4345,24 @@ input[type="date"] { font-family: 'JetBrains Mono', monospace; letter-spacing: 0
     </div>
 
     <div id="healthPaneLoad">
-      <p style="color:var(--text3);font-size:12px;margin-bottom:14px;">
-        Live-нагрузка сервера: ОЗУ, процессор, диски и сеть. Данные читаются прямо из ядра (<code>/proc</code>, <code>statvfs</code>) без внешних зависимостей и обновляются автоматически, пока окно открыто.
-      </p>
-      <div id="healthBody" style="max-height:60vh;overflow-y:auto;padding-right:4px;"></div>
+      <div class="health-scroll">
+        <p style="color:var(--text3);font-size:12px;margin-bottom:14px;">
+          Live-нагрузка сервера: ОЗУ, процессор, диски и сеть. Данные читаются прямо из ядра (<code>/proc</code>, <code>statvfs</code>) без внешних зависимостей и обновляются автоматически, пока окно открыто.
+        </p>
+        <div id="healthBody"></div>
+        <div class="hh-head">
+          <div class="hh-title">История нагрузки</div>
+          <div class="hh-seg" id="hhRange">
+            <button data-range="1h" onclick="hhSetRange('1h')">1 час</button>
+            <button data-range="24h" onclick="hhSetRange('24h')">24 часа</button>
+            <button data-range="7d" onclick="hhSetRange('7d')">7 дней</button>
+            <button data-range="30d" onclick="hhSetRange('30d')">30 дней</button>
+            <button data-range="90d" onclick="hhSetRange('90d')">90 дней</button>
+          </div>
+        </div>
+        <div class="hh-note">Панель сама замеряет нагрузку раз в 10 секунд и хранит историю 180 дней. Среднее и пик — за выбранный период, «Раньше» — за такой же период до него. Наведите на график или коснитесь его, чтобы увидеть значения.</div>
+        <div id="healthHist" class="hh-grid"></div>
+      </div>
     </div>
 
     <div id="healthPaneFw" class="hidden fw-modal">

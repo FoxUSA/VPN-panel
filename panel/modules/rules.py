@@ -14,13 +14,16 @@ app.py приезжают в init() одним словарём и ложатс�
 реестр системных путей и апдейтер.
 """
 
+import gzip
 import hashlib
 import ipaddress
 import json
 import os
 import re
+import socket
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, wait
 
 from flask import Blueprint, jsonify, request
 
@@ -37,6 +40,7 @@ _public_access_info = None
 _save_server_config = None
 _xray_unique_email = None
 audit = None
+geo_asn_full = None
 find_xray_inbound_idx = None
 load_xray_clients = None
 load_xray_config = None
@@ -45,10 +49,13 @@ save_xray_config = None
 schedule_xray_restart = None
 login_required = None
 SERVER_CFG = {}
-BM7_SERVICES_URL = ''
+RULE_BASE_URL = ''
+PANEL_VERSION = ''
 BM7_TEMPLATES_FILE = ''
 BYFOX_RULES_BASE = ''
 BYFOX_RULES_FILE = ''
+RULE_TPL_CACHE_DIR = ''
+RULE_INDEX_DIR = ''
 COUNTRIES_CACHE_DIR = ''
 COUNTRIES_SRC_DIR = ''
 COUNTRIES_ZIP_URL = ''
@@ -63,10 +70,13 @@ CLIENT_RULE_PLATFORMS = ()
 _xray_restart_lock = None
 
 REQUIRED_DEPS = [
-    'BM7_SERVICES_URL',
+    'RULE_BASE_URL',
+    'PANEL_VERSION',
     'BM7_TEMPLATES_FILE',
     'BYFOX_RULES_BASE',
     'BYFOX_RULES_FILE',
+    'RULE_TPL_CACHE_DIR',
+    'RULE_INDEX_DIR',
     'CLIENT_RULE_PLATFORMS',
     'COUNTRIES_CACHE_DIR',
     'COUNTRIES_SRC_DIR',
@@ -89,6 +99,7 @@ REQUIRED_DEPS = [
     '_xray_unique_email',
     'audit',
     'find_xray_inbound_idx',
+    'geo_asn_full',
     'load_xray_clients',
     'load_xray_config',
     'login_required',
@@ -105,7 +116,7 @@ def init(deps):
         raise RuntimeError('rules.init: не переданы зависимости: ' + ', '.join(missing))
     globals().update(deps)
     for name in ('XRAY_RULE_LISTS_DB', 'COUNTRIES_CACHE_DIR', 'COUNTRIES_SRC_DIR',
-                 'BM7_TEMPLATES_FILE', 'BYFOX_RULES_FILE'):
+                 'BM7_TEMPLATES_FILE', 'BYFOX_RULES_FILE', 'RULE_BASE_URL', 'RULE_INDEX_DIR'):
         if not globals().get(name):
             raise RuntimeError(f'rules.init: пустой {name} — путь не построить')
     # Стартовые действия, которые раньше стояли на верхнем уровне app.py:
@@ -118,6 +129,9 @@ def init(deps):
         seed_rule_lists_if_empty()
     except Exception as e:
         print(f'[rules] засев каталога правил не удался: {e}', flush=True)
+    # Индекс шаблонов для «Домен или IP» — через пару минут после старта, чтобы
+    # не мешать запуску. Свежий (сверен за сутки) не трогается.
+    _tpl_index_kick(delay=120)
 
 
 def _auth(fn):
@@ -275,55 +289,43 @@ def _countries_bootstrap_if_missing():
         except Exception: pass
 
 
-# Default rule list catalog. Seeded into XRAY_RULE_LISTS_DB on first run.
-# Each entry has separate URLs for Shadowrocket and Surge — the .list files
-# differ in supported operators between the two clients.
+# Файлы blackmatrix7 — с зеркала на api.byfox.dev: путь тот же, что в репо bm7
+# (rule/<Платформа>/<Имя>/<файл>), меняется только начало адреса.
 def _bm7(client_dir, fname):
-    return f'https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/{client_dir}/{fname}'
+    return f'{RULE_BASE_URL}bm7/{client_dir}/{fname}'
 
 
-# Блокирующие списки blackmatrix7, идут в каталоге сразу за нашим Block ads/trackers.
-# Порядок каталога = приоритет правил в конфиге, поэтому блокировки стоят первыми.
-# Advertising и Privacy разбиты у bm7 надвое: домены лежат в <Имя>_Domain, а в
-# <Имя> остаётся огрызок из keyword/IP-CIDR (см. TPL_DOMAIN_SPLIT в app.js).
-XRAY_DEFAULT_BLOCK_LISTS = [
-    {'id': 'advertising', 'name': 'Advertising', 'policy': 'reject',
-     'url': _bm7('Clash', 'Advertising/Advertising_Domain.yaml')},
-    {'id': 'privacy',     'name': 'Privacy',     'policy': 'reject',
-     'url': _bm7('Clash', 'Privacy/Privacy_Domain.yaml')},
-    {'id': 'hijacking',   'name': 'Hijacking',   'policy': 'reject',
-     'url': _bm7('Clash', 'Hijacking/Hijacking.yaml')},
-]
+# Старые адреса шаблонов → api.byfox.dev. Хвост пути у всех трёх совпадает.
+# Сохранённые в каталоге URL переписываются при чтении (load_rule_lists), а
+# _rule_url_for_platform прогоняет через это всё, что приходит, на случай
+# адреса, который ещё не прошёл через каталог.
+_OLD_RULE_PREFIXES = (
+    ('https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/', 'bm7/'),
+    ('https://cdn.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/', 'bm7/'),
+    ('https://byfox.dev/data/awg-panel/rules/', 'byfox/'),
+)
 
 
-# Сервисные шаблоны bm7. БОЛЬШЕ НЕ СИДЯТСЯ (см. seed_rule_lists_if_empty): у bm7
-# папки переименовываются, и в свежем каталоге висели бы битые URL. Оставлено как
-# справочник имён/URL — юзер добавляет сервисы через «Шаблоны» с живого индекса.
-XRAY_DEFAULT_RULE_LISTS = [
-    # (id, name, shadowrocket_url, loon_url, clash_url)
-    ('telegram',  'Telegram',           _bm7('Shadowrocket','Telegram/Telegram.list'),     _bm7('Loon','Telegram/Telegram.list'),     _bm7('Clash','Telegram/Telegram.yaml')),
-    ('instagram', 'Instagram',          _bm7('Shadowrocket','Instagram/Instagram.list'),   _bm7('Loon','Instagram/Instagram.list'),   _bm7('Clash','Instagram/Instagram.yaml')),
-    ('whatsapp',  'WhatsApp',           _bm7('Shadowrocket','Whatsapp/Whatsapp.list'),     _bm7('Loon','Whatsapp/Whatsapp.list'),     _bm7('Clash','Whatsapp/Whatsapp.yaml')),
-    ('youtube',   'YouTube',            _bm7('Shadowrocket','YouTube/YouTube.list'),       _bm7('Loon','YouTube/YouTube.list'),       _bm7('Clash','YouTube/YouTube.yaml')),
-    ('gemini',    'Gemini',             _bm7('Shadowrocket','Gemini/Gemini.list'),         _bm7('Loon','Gemini/Gemini.list'),         _bm7('Clash','Gemini/Gemini.yaml')),
-    ('anthropic', 'Claude / Anthropic', _bm7('Shadowrocket','Anthropic/Anthropic.list'),   _bm7('Loon','Anthropic/Anthropic.list'),   _bm7('Clash','Anthropic/Anthropic.yaml')),
-    ('protonmail','ProtonMail',         _bm7('Shadowrocket','ProtonMail/ProtonMail.list'), _bm7('Loon','ProtonMail/ProtonMail.list'), _bm7('Clash','ProtonMail/ProtonMail.yaml')),
-    ('speedtest', 'Speedtest',          _bm7('Shadowrocket','Speedtest/Speedtest.list'),   _bm7('Loon','Speedtest/Speedtest.list'),   _bm7('Clash','Speedtest/Speedtest.yaml')),
-    ('tiktok',    'TikTok',             _bm7('Shadowrocket','TikTok/TikTok.list'),         _bm7('Loon','TikTok/TikTok.list'),         _bm7('Clash','TikTok/TikTok.yaml')),
-    ('appleproxy','iMessage / FaceTime',_bm7('Shadowrocket','AppleProxy/AppleProxy.list'), _bm7('Loon','AppleProxy/AppleProxy.list'), _bm7('Clash','AppleProxy/AppleProxy.yaml')),
-    ('netflix',   'Netflix',            _bm7('Shadowrocket','Netflix/Netflix.list'),       _bm7('Loon','Netflix/Netflix.list'),       _bm7('Clash','Netflix/Netflix.yaml')),
-    ('discord',   'Discord',            _bm7('Shadowrocket','Discord/Discord.list'),       _bm7('Loon','Discord/Discord.list'),       _bm7('Clash','Discord/Discord.yaml')),
-    ('openai',    'ChatGPT / OpenAI',   _bm7('Shadowrocket','OpenAI/OpenAI.list'),         _bm7('Loon','OpenAI/OpenAI.list'),         _bm7('Clash','OpenAI/OpenAI.yaml')),
-]
+def _migrate_rule_url(url):
+    for old, new in _OLD_RULE_PREFIXES:
+        if url and url.startswith(old):
+            return RULE_BASE_URL + new + url[len(old):]
+    return url
 
 
-def _fetch_remote_bm7_date():
-    """Дата свежих шаблонов blackmatrix7 (DD.MM.YYYY) с CDN; '' при ошибке."""
-    try:
-        d, _ = _bm7_parse(_http_get_text(BM7_SERVICES_URL, timeout=12))
-        return d or ''
-    except Exception:
-        return ''
+def _default_block_lists():
+    """Блокирующие списки blackmatrix7 для сида каталога. Порядок каталога =
+    приоритет правил в конфиге, поэтому блокировки стоят первыми. У Advertising
+    и Privacy домены лежат в <Имя>_Domain (domain-set), остальное — в «rest»
+    (см. _tpl_rest_url). Функция, а не константа: RULE_BASE_URL приезжает в init()."""
+    return [
+        {'id': 'advertising', 'name': 'Advertising', 'policy': 'reject',
+         'url': _bm7('Clash', 'Advertising/Advertising_Domain.yaml')},
+        {'id': 'privacy',     'name': 'Privacy',     'policy': 'reject',
+         'url': _bm7('Clash', 'Privacy/Privacy_Domain.yaml')},
+        {'id': 'hijacking',   'name': 'Hijacking',   'policy': 'reject',
+         'url': _bm7('Clash', 'Hijacking/Hijacking.yaml')},
+    ]
 
 
 def _slugify_rule_id(s):
@@ -475,7 +477,23 @@ def load_rule_lists():
     if isinstance(data, dict):
         # Новая схема — уже единый каталог.
         if 'lists' in data:
-            return {'lists': _norm(data.get('lists')), 'global': _norm(data.get('global'))}
+            out = {'lists': _norm(data.get('lists')), 'global': _norm(data.get('global'))}
+            # Шаблоны переехали на api.byfox.dev: старые адреса (GitHub, byfox.dev/data)
+            # переписываем один раз и сохраняем — дальше каталог уже с новыми.
+            moved = 0
+            for e in out['lists'] + out['global']:
+                if e.get('url'):
+                    new = _migrate_rule_url(e['url'])
+                    if new != e['url']:
+                        e['url'] = new
+                        moved += 1
+            if moved:
+                try:
+                    save_rule_lists(out)
+                    audit('info', f'Списки правил: {moved} адресов шаблонов переведены на api.byfox.dev')
+                except Exception:
+                    pass
+            return out
         # Старая по-платформенная схема → сливаем sr/loon/clash(/surge) в один
         # каталог по id (id одинаков на всех платформах, дублей нет).
         merged, seen = [], set()
@@ -530,46 +548,14 @@ def _byfox_rules_load():
     return {}
 
 
-def _byfox_rules_save(d):
-    try:
-        with open(BYFOX_RULES_FILE, 'w') as f:
-            json.dump(d, f, ensure_ascii=False)
-    except Exception:
-        pass
-
-
 def _byfox_own_folders():
-    """Имена наших шаблонов (папок) из кэша; пусто, если ещё не синкали."""
+    """Имена наших шаблонов: из каталога api.byfox.dev, а пока его нет — из
+    старого кэша folders.txt. Скрытые не показываем."""
+    items = _tpl_items()
+    if items:
+        return [i['id'] for i in items if i.get('src') == 'byfox' and not i.get('hidden')]
     fs = _byfox_rules_load().get('folders')
     return fs if isinstance(fs, list) else []
-
-
-def _byfox_rules_sync_once():
-    """Тянет folders.txt в локальный кэш — это перечень наших шаблонов для пикера.
-    Период — общий с blackmatrix7 (вызывается из _bm7_sync_once).
-
-    Сами правила панель НЕ качает: с тех пор как block_ads_trackers_quic стал
-    обычным rule-set'ом, их забирает клиент по URL, как у blackmatrix7.
-
-    Возвращает (было, стало) — списки папок для итога «что изменилось».
-    """
-    before = list(_byfox_rules_load().get('folders') or [])
-    text = _http_get_text(BYFOX_RULES_BASE + '/folders.txt', timeout=12)
-    folders, seen = [], set()
-    for raw in (text or '').splitlines():
-        s = raw.strip()
-        if not s or s.startswith('#') or s in seen:
-            continue
-        seen.add(s)
-        folders.append(s)
-    if not folders:
-        return before, before
-    _byfox_rules_save({'folders': folders, 'fetched': time.strftime('%Y-%m-%d %H:%M')})
-    try:
-        audit('info', f'Свои шаблоны правил обновлены ({len(folders)} шт)')
-    except Exception:
-        pass
-    return before, folders
 
 
 def _bm7_parse(text):
@@ -599,7 +585,7 @@ def _bm7_date_tuple(d):
 
 
 def _bm7_load_templates():
-    """{date, services, last_check} из кэша; пусто, если кэша ещё нет."""
+    """Кэш каталога {date, sha, base, items[]}; у старого кэша — {date, services[]}."""
     try:
         with open(BM7_TEMPLATES_FILE, 'r') as f:
             d = json.load(f)
@@ -611,11 +597,10 @@ def _bm7_load_templates():
 
 
 def _bm7_save_templates(d):
-    try:
-        with open(BM7_TEMPLATES_FILE, 'w') as f:
-            json.dump(d, f, ensure_ascii=False)
-    except Exception:
-        pass
+    tmp = BM7_TEMPLATES_FILE + '.tmp'
+    with open(tmp, 'w') as f:
+        json.dump(d, f, ensure_ascii=False)
+    os.replace(tmp, BM7_TEMPLATES_FILE)
 
 
 def _bm7_local_version():
@@ -633,50 +618,159 @@ def _bm7_write_version(v):
 
 def _bm7_interval_days():
     try:
-        return max(1, int(SERVER_CFG.get('bm7_check_interval_days') or 7))
+        return max(1, int(SERVER_CFG.get('bm7_check_interval_days') or 1))
     except Exception:
-        return 7
+        return 1
+
+
+# --- Каталог шаблонов с api.byfox.dev --------------------------------------
+# rule/templates.json(.gz) — все шаблоны bm7 и свои: подсказки RU/EN, теги,
+# пути файлов под каждую платформу (files), у domain-set — ещё и rest (classical
+# с keyword/IP, которые в domain-set не влезли). rule/manifest.json — sha
+# каталога и индекса: по нему видно, что поменялось, не качая сам каталог.
+# Из каталога в кэш берём только то, что читает панель.
+_TPL_KEEP_FIELDS = ('id', 'src', 'name', 'title', 'desc', 'tags', 'category', 'check',
+                    'domain_set', 'stats', 'sample', 'files', 'rest', 'hidden', 'updated')
+_tpl_cache_mem = {'mtime': None, 'data': {}}
+
+
+def _rule_manifest():
+    return json.loads(_http_get_text(RULE_BASE_URL + 'manifest.json', timeout=12))
+
+
+def _iso_to_ddmm(iso):
+    """'2026-11-03' → '03.11.2026' (формат bm7_version, по нему сравнивает апдейтер)."""
+    m = re.match(r'^(\d{4})-(\d{2})-(\d{2})', str(iso or ''))
+    return f'{m.group(3)}.{m.group(2)}.{m.group(1)}' if m else ''
+
+
+def _get_verified(rel, sha, timeout=60):
+    """Файл с api.byfox.dev/rule/ с проверкой sha256 из манифеста."""
+    data = _http_get_bytes(RULE_BASE_URL + rel, timeout=timeout)
+    if sha and hashlib.sha256(data).hexdigest() != sha:
+        raise ValueError(f'{rel}: sha256 не совпал с rule/manifest.json')
+    return data
+
+
+def _tpl_cached():
+    """Кэш каталога из файла, перечитывается по mtime (его читают пикер, профили, поиск)."""
+    try:
+        mt = os.path.getmtime(BM7_TEMPLATES_FILE)
+    except OSError:
+        return {}
+    if _tpl_cache_mem['mtime'] != mt:
+        _tpl_cache_mem['data'] = _bm7_load_templates()
+        _tpl_cache_mem.pop('urls', None)
+        _tpl_cache_mem['mtime'] = mt
+    return _tpl_cache_mem['data']
+
+
+def _tpl_items():
+    items = _tpl_cached().get('items')
+    return items if isinstance(items, list) else []
+
+
+def _tpl_base():
+    return _tpl_cached().get('base') or RULE_BASE_URL
+
+
+def _tpl_url_map():
+    """URL файла шаблона (lower) → (item, 'files'|'rest', платформа)."""
+    _tpl_cached()
+    m = _tpl_cache_mem.get('urls')
+    if m is None:
+        m, base = {}, _tpl_base()
+        for it in _tpl_items():
+            for kind in ('files', 'rest'):
+                for plat, rel in (it.get(kind) or {}).items():
+                    m[(base + rel).lower()] = (it, kind, plat)
+        _tpl_cache_mem['urls'] = m
+    return m
+
+
+def _tpl_rest_url(url):
+    """Для domain-set шаблона — его classical-«rest» той же платформы, иначе ''.
+
+    bm7 кладёт домены крупных списков в <Имя>_Domain, а ключевые слова, IP и ASN —
+    в <Имя>.yaml/.list. Подключать надо оба, иначе половина правил теряется."""
+    hit = _tpl_url_map().get(_migrate_rule_url(url or '').lower())
+    if not hit:
+        return ''
+    it, kind, plat = hit
+    rel = (it.get('rest') or {}).get(plat) if kind == 'files' and it.get('domain_set') else None
+    return _tpl_base() + rel if rel else ''
+
+
+def _fetch_remote_bm7_date():
+    """Дата каталога шаблонов на api.byfox.dev (DD.MM.YYYY); '' при ошибке."""
+    try:
+        return _iso_to_ddmm(_rule_manifest().get('date'))
+    except Exception:
+        return ''
+
+
+def _tpl_visible_ids(cached):
+    items = cached.get('items')
+    if isinstance(items, list):
+        return ([i['id'] for i in items if i.get('src') == 'bm7' and not i.get('hidden')],
+                [i['id'] for i in items if i.get('src') == 'byfox' and not i.get('hidden')])
+    return list(cached.get('services') or []), list(_byfox_rules_load().get('folders') or [])
 
 
 def _bm7_sync_once():
-    """Тянет blackmatrix7.txt и, если дата свежее (или кэша ещё нет), перезаписывает
-    кэш ШАБЛОНОВ. xray_rule_lists.json НЕ трогается — там выбор пользователя.
-    Заодно (тот же период) синкает свои шаблоны с byfox.dev.
+    """Синк каталога шаблонов + индекса для «Домен или IP» (индекс — фоном)."""
+    man = None
+    try:
+        man = _rule_manifest()
+    except Exception as e:
+        try: audit('warn', f'api.byfox.dev/rule/manifest.json недоступен: {e}')
+        except Exception: pass
+    try:
+        return _bm7_sync_core(man)
+    finally:
+        _tpl_index_kick(manifest=man)
+
+
+def _bm7_sync_core(man):
+    """Перекачивает каталог, если sha templates.json.gz в манифесте сменился (или
+    кэша ещё нет). xray_rule_lists.json НЕ трогается — там выбор пользователя.
 
     Возвращает итог для кнопки «Обновить шаблоны»: сколько всего и что
     добавилось или ушло (blackmatrix7 и свои — вместе)."""
-    own_before = own_after = list(_byfox_rules_load().get('folders') or [])
-    try:
-        own_before, own_after = _byfox_rules_sync_once()   # свои шаблоны; период общий с bm7
-    except Exception as e:
-        try: audit('warn', f'Свои шаблоны правил: {e}')
-        except Exception: pass
     cached = _bm7_load_templates()
-    bm7_before = list(cached.get('services') or [])
-    bm7_after = bm7_before
+    bm7_before, own_before = _tpl_visible_ids(cached)
 
-    def _summary():
-        added = [s for s in bm7_after if s not in set(bm7_before)] + [s for s in own_after if s not in set(own_before)]
-        removed = [s for s in bm7_before if s not in set(bm7_after)] + [s for s in own_before if s not in set(own_after)]
-        return {'bm7': len(bm7_after), 'own': len(own_after), 'added': added, 'removed': removed}
+    def _summary(changed, now):
+        bm7_after, own_after = _tpl_visible_ids(now)
+        before = set(bm7_before) | set(own_before)
+        after = set(bm7_after) | set(own_after)
+        return {'bm7': len(bm7_after), 'own': len(own_after), 'changed': changed,
+                'added': sorted(after - before, key=str.lower),
+                'removed': sorted(before - after, key=str.lower)}
 
-    text = _http_get_text(BM7_SERVICES_URL, timeout=12)
-    remote_date, services = _bm7_parse(text)
-    if not services:
-        return _summary()
-    have_cache = bool(bm7_before)
-    newer = bool(remote_date) and _bm7_date_tuple(remote_date) > _bm7_date_tuple(_bm7_local_version())
-    if not (newer or not have_cache):
-        return _summary()
-    _bm7_save_templates({'date': remote_date or '', 'services': services})
-    bm7_after = services
-    if remote_date:
-        _bm7_write_version(remote_date)
+    if not man:
+        raise RuntimeError('api.byfox.dev не ответил — шаблоны остались прежние')
+    f = (man.get('files') or {}).get('templates.json.gz') or {}
+    if cached.get('items') and cached.get('sha') == f.get('sha256'):
+        return _summary(False, cached)
+    tpl = json.loads(gzip.decompress(_get_verified('templates.json.gz', f.get('sha256'))).decode('utf-8'))
+    items = [{k: i[k] for k in _TPL_KEEP_FIELDS if k in i}
+             for i in (tpl.get('items') or []) if isinstance(i, dict) and i.get('id') and i.get('files')]
+    if len(items) < 100:
+        raise RuntimeError(f'в каталоге api.byfox.dev подозрительно мало шаблонов ({len(items)})')
+    date = _iso_to_ddmm(man.get('date') or tpl.get('date'))
+    now = {'date': date, 'sha': f.get('sha256') or '', 'base': RULE_BASE_URL,
+           'bm7_date': tpl.get('bm7_date') or '', 'items': items,
+           'fetched': time.strftime('%Y-%m-%d %H:%M')}
+    _bm7_save_templates(now)
+    if date:
+        _bm7_write_version(date)
+    s = _summary(True, now)
     try:
-        audit('info', f'blackmatrix7: библиотека шаблонов обновлена ({len(services)} шт, дата {remote_date or "?"})')
+        audit('info', f'Шаблоны правил обновлены с api.byfox.dev: {s["bm7"]} blackmatrix7 и {s["own"]} своих, дата {date or "?"}')
     except Exception:
         pass
-    return _summary()
+    return s
 
 
 def _parse_clash_payload(text):
@@ -793,13 +887,15 @@ def _save_global_cache(cache):
 # Версия разборщика в ключе кеша: при правке _parse_clash_payload старый разбор,
 # закешированный в global_cache.json, пересобирается сам, без ручного сброса.
 # 2 — '+.домен' из *_Domain.yaml и отбрасывание чужих типов (IP-ASN и т.п.).
-_GLOBAL_PARSER_VER = 2
+# 3 — файлы с api.byfox.dev и rest к domain-set (keyword/IP, что в _Domain не влезли).
+_GLOBAL_PARSER_VER = 3
 
 
 def _entry_cache_key(entry):
     """Стабильный ключ источника правил: URL или хеш inline-rules."""
     if entry.get('url'):
-        return f'url{_GLOBAL_PARSER_VER}:' + entry['url']
+        url = _migrate_rule_url(entry['url'])
+        return f'url{_GLOBAL_PARSER_VER}:' + url + ('|' + _tpl_rest_url(url) if _tpl_rest_url(url) else '')
     if entry.get('rules'):
         h = hashlib.sha256(('\n'.join(entry['rules'])).encode('utf-8')).hexdigest()[:16]
         return 'inl:' + h
@@ -832,16 +928,21 @@ def _aggregate_global_lists(selected_ids, force_refresh=False):
         if entry.get('rules'):
             parsed = _parse_inline_rules(entry['rules'])
         elif entry.get('url'):
+            url = _migrate_rule_url(entry['url'])
+            rest = _tpl_rest_url(url)
             try:
-                text = _http_get_text(entry['url'], timeout=15)
+                parsed = {'domain': [], 'ip': []}
+                for u in ([url, rest] if rest else [url]):
+                    part = _parse_clash_payload(_http_get_text(u, timeout=15))
+                    parsed['domain'] += part['domain']
+                    parsed['ip'] += part['ip']
             except Exception as e:
-                audit('warn', f'Global rules: не удалось скачать {entry["url"]}: {e}')
+                audit('warn', f'Global rules: не удалось скачать {url}: {e}')
                 if cached and isinstance(cached.get('domain'), list):
                     # При сетевой ошибке — fallback на старый кеш.
                     all_domains.update(cached['domain'])
                     all_ips.update(cached['ip'])
                 continue
-            parsed = _parse_clash_payload(text)
         else:
             continue
         cache[str(lid)] = {
@@ -958,8 +1059,8 @@ def seed_rule_lists_if_empty():
     # DNS-листах нет (doubleclick.net, googletagmanager.com), ломают YouTube и
     # сайты с consent-баннерами. Шаблон остаётся на CDN и доступен через кнопку
     # «Шаблоны» — кому нужен, добавляет руками.
-    lists = [dict(e) for e in XRAY_DEFAULT_BLOCK_LISTS]
-    glob = [dict(e) for e in XRAY_DEFAULT_BLOCK_LISTS]
+    lists = _default_block_lists()
+    glob = _default_block_lists()
     save_rule_lists({'lists': lists, 'global': glob})
 
 
@@ -1076,20 +1177,30 @@ def apply_allow_ip_rules():
 
 
 def _rule_url_for_platform(url, platform):
-    """Канонический blackmatrix7-URL → URL под нужную платформу (отличаются только
-    каталогом репо и расширением: SR/Loon → .list, Clash → .yaml). Не-bm7 URL
-    (свой произвольный) отдаём как есть."""
+    """Канонический URL шаблона → URL под нужную платформу. Шаблон из каталога
+    api.byfox.dev — путь берём из его files/rest (у платформы может быть свой файл
+    или его нет вовсе); иначе — по шаблону пути bm7 (каталог репо + расширение:
+    SR/Loon → .list, Clash → .yaml). Старые адреса (GitHub, byfox.dev/data) сначала
+    переводятся на api.byfox.dev. Произвольный URL отдаём как есть."""
     if not url:
         return url
-    # Свои шаблоны byfox: /rules/<name>/{clash/rules.yaml|loon/rules.list|shadowrocket/rules.list}
-    mb = re.search(r'^(https?://\S+/data/awg-panel/rules/[^/]+)/(?:clash|loon|shadowrocket)/rules\.(?:yaml|list)$', url)
+    url = _migrate_rule_url(url)
+    plat = platform if platform in ('shadowrocket', 'loon') else 'clash'
+    hit = _tpl_url_map().get(url.lower())
+    if hit:
+        it, kind, _ = hit
+        rel = (it.get(kind) or {}).get(plat)
+        if rel:
+            return _tpl_base() + rel
+    # Свои шаблоны byfox: /byfox/<name>/{clash/rules.yaml|loon/rules.list|shadowrocket/rules.list}
+    mb = re.search(r'^(https?://\S+/rule/byfox/[^/]+)/(?:clash|loon|shadowrocket)/rules\.(?:yaml|list)$', url)
     if mb:
         prefix = mb.group(1)
         if platform == 'clash':
             return f'{prefix}/clash/rules.yaml'
         p = 'shadowrocket' if platform == 'shadowrocket' else 'loon'
         return f'{prefix}/{p}/rules.list'
-    m = re.search(r'/rule/(?:Shadowrocket|Loon|Clash)/(.+?)/([^/]+)\.(?:list|yaml)$', url)
+    m = re.search(r'/rule/bm7/(?:Shadowrocket|Loon|Clash)/(.+?)/([^/]+)\.(?:list|yaml)$', url)
     if not m:
         return url
     name_dir, fname = m.group(1), m.group(2)
@@ -1221,10 +1332,598 @@ def xray_rule_lists_get():
 @bp.route('/api/xray/rule-templates', methods=['GET'])
 @_auth
 def xray_rule_templates_get():
-    """Библиотека шаблонов blackmatrix7 для пикера «Шаблоны». Авто-обновляется
-    по интервалу bm7_* из server.json (_auto_update_loop). Пусто → фронт берёт вшитый TPL_SERVICES."""
-    t = _bm7_load_templates()
+    """Каталог шаблонов для пикера «Шаблоны» (с api.byfox.dev, авто-обновляется по
+    интервалу bm7_* из server.json). items — с подсказками и путями файлов, base —
+    к чему эти пути приклеивать. Каталога ещё нет — старый кэш имён (services/own),
+    а совсем пусто → фронт берёт вшитый TPL_SERVICES."""
+    t = _tpl_cached()
+    items = [i for i in _tpl_items() if not i.get('hidden')]
+    if items:
+        # Слова для поиска в пикере — из names индекса: id, теги, слова подсказки и
+        # категории на RU/EN («imessage» → Apple, «нейросети» → OpenAI, Claude…).
+        words = {}
+        try:
+            ids = (_idx_read('ids.json') or {}).get('ids') or []
+            for w, nums in (_idx_read('names.json.gz', keep=False) or {}).items():
+                for n in nums:
+                    if 0 <= n < len(ids):
+                        words.setdefault(ids[n], []).append(w)
+        except Exception:
+            pass
+        items = [dict(i, words=' '.join(words.get(i['id'], ()))) for i in items]
+        return jsonify({'date': t.get('date') or '', 'base': _tpl_base(), 'items': items})
     return jsonify({'date': t.get('date') or '', 'services': t.get('services') or [], 'own': _byfox_own_folders()})
+
+
+# === Где домен: поиск по содержимому списков ================================
+# Поле «Домен или IP» в модалке «Списки правил»: в какие записи каталога попадает
+# адрес и какая из них сработает первой (порядок каталога = приоритет). Домен
+# резолвится на сервере — так IP-CIDR / IP-ASN / GEOIP правила тоже проверяются.
+# Файлы списков и шаблонов — копиями на диске (RULE_TPL_CACHE_DIR), общими для
+# поиска и индекса шаблонов: один и тот же файл не качается дважды.
+_LOOKUP_DEADLINE = 12          # gunicorn --timeout 30: не дольше, недокачанное — в фоне
+_LOOKUP_MAX_HITS = 5           # строк-совпадений на запись, остальное — счётчиком
+_RULES_FRESH = 86400           # копия младше суток — не перекачиваем
+_DL_FILE_DEADLINE = 45         # потолок на файл целиком: GitHub с сервера бывает еле живой
+_dl_inflight = {}              # url → Future: опрос раз в 4 с не плодит повторных загрузок
+_dl_lock = threading.Lock()
+_dl_pool = None
+_gh_slow_until = 0             # GitHub подвёл — час качаем сначала с jsDelivr
+_LOOKUP_DOMAIN_TYPES = ('DOMAIN', 'DOMAIN-SUFFIX', 'DOMAIN-KEYWORD', 'DOMAIN-WILDCARD', 'DOMAIN-REGEX')
+_LOOKUP_IP_TYPES = ('IP-CIDR', 'IP-CIDR6', 'IP-ASN', 'GEOIP')
+
+
+def _lookup_parse_query(q):
+    """'https://www.x.com:443/p' → ('www.x.com', []); '1.2.3.4' → ('', ['1.2.3.4'])."""
+    s = (q or '').strip()
+    m = re.match(r'^(?:[a-z][a-z0-9+.-]*://)?(?:[^@/?#\s]*@)?(\[[^\]]+\]|[^/?#\s]+)', s, re.I)
+    host = m.group(1) if m else ''
+    if host.startswith('['):
+        host = host[1:-1]
+    elif host.count(':') == 1:
+        host = host.split(':', 1)[0]
+    host = host.strip().rstrip('.').lower()
+    if host.startswith('*.'):
+        host = host[2:]
+    try:
+        return '', [str(ipaddress.ip_address(host))]
+    except ValueError:
+        pass
+    try:
+        host = host.encode('idna').decode('ascii')   # .рф → xn--p1ai, как в списках
+    except Exception:
+        pass
+    if not re.match(r'^[a-z0-9_-]+(?:\.[a-z0-9_-]+)+$', host):
+        return None, None
+    return host, []
+
+
+def _lookup_resolve(host, timeout=4):
+    """A/AAAA глазами сервера. getaddrinfo не умеет таймаут — ждём его в потоке."""
+    res = {}
+
+    def run():
+        try:
+            infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+            res['ips'] = list(dict.fromkeys(i[4][0] for i in infos))
+        except Exception as e:
+            res['err'] = str(e)
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    t.join(timeout)
+    if t.is_alive():
+        return [], f'DNS timeout {timeout}s'
+    return res.get('ips') or [], res.get('err')
+
+
+def _rules_mirror(url):
+    """raw.githubusercontent.com → то же через jsDelivr; для прочих URL — ''."""
+    m = re.match(r'^https://raw\.githubusercontent\.com/([^/]+)/([^/]+)/([^/]+)/(.+)$', url)
+    return f'https://cdn.jsdelivr.net/gh/{m.group(1)}/{m.group(2)}@{m.group(3)}/{m.group(4)}' if m else ''
+
+
+def _read_url_capped(url, deadline):
+    """Скачать целиком, но не дольше deadline: таймаут urlopen — на каждое чтение,
+    и струйка в пару КБ/с тянула 8-мегабайтный файл бесконечно."""
+    import urllib.request
+    t0 = time.time()
+    req = urllib.request.Request(url, headers={'User-Agent': f'awg-panel/{PANEL_VERSION}'})
+    chunks = []
+    with urllib.request.urlopen(req, timeout=15) as r:
+        while True:
+            b = r.read(65536)
+            if not b:
+                break
+            chunks.append(b)
+            if time.time() - t0 > deadline:
+                raise TimeoutError(f'timeout {deadline}s')
+    return b''.join(chunks).decode('utf-8', errors='replace')
+
+
+def _rules_fetch(url):
+    global _gh_slow_until
+    alt = _rules_mirror(url)
+    order = [url]
+    if alt:
+        order = [alt, url] if time.time() < _gh_slow_until else [url, alt]
+    err = None
+    for u in order:
+        try:
+            return _read_url_capped(u, _DL_FILE_DEADLINE)
+        except Exception as e:
+            err = e
+            if u == url and alt:
+                _gh_slow_until = time.time() + 3600
+    raise err
+
+
+def _rules_age(url):
+    try:
+        return time.time() - os.path.getmtime(_tpl_file(url))
+    except OSError:
+        return None
+
+
+def _rules_cached(url):
+    """Текст копии файла с диска или None."""
+    try:
+        with open(_tpl_file(url), 'r', encoding='utf-8') as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def _rules_download_job(url):
+    text = _rules_fetch(url)
+    path = _tpl_file(url)
+    os.makedirs(RULE_TPL_CACHE_DIR, exist_ok=True)
+    tmp = f'{path}.{threading.get_ident()}.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        f.write(text)
+    os.replace(tmp, path)       # поиск видит старую копию или новую, но не огрызок
+
+
+def _rules_download(url, pool=None):
+    """Future загрузки url в дисковый кеш. Уже идущая загрузка переиспользуется.
+    Результат не возвращаем: Future живёт в _dl_inflight, текст держал бы память."""
+    global _dl_pool
+    with _dl_lock:
+        f = _dl_inflight.get(url)
+        if f and not f.done():
+            return f
+        if pool is None:
+            if _dl_pool is None:
+                _dl_pool = ThreadPoolExecutor(max_workers=6)
+            pool = _dl_pool
+        f = pool.submit(_rules_download_job, url)
+        _dl_inflight[url] = f
+        return f
+
+
+def _lookup_scan(text, inline, host, ips, asns, ccs):
+    """Строки списка, под которые попадает host или один из его IP.
+
+    Понимает и Clash YAML (payload, '+.домен'), и .list. Голый домен в своём
+    списке («Вручную») — суффикс, как его и собирает конфиг; в файле по URL
+    (behavior: domain) — точное имя."""
+    hits, total = [], 0
+    for raw in text.splitlines():
+        s = raw.strip()
+        if not s or s[0] in '#;' or s.startswith('//') or s.endswith(':'):
+            continue
+        if s.startswith('- '):
+            s = s[2:].strip()
+        s = s.strip('\'"')
+        parts = [p.strip() for p in s.split(',')]
+        typ = parts[0].upper()
+        hit = None
+        if len(parts) >= 2 and typ in _LOOKUP_DOMAIN_TYPES:
+            if not host:
+                continue
+            v = parts[1].lower()
+            if typ == 'DOMAIN':
+                ok = host == v
+            elif typ == 'DOMAIN-SUFFIX':
+                ok = host == v or host.endswith('.' + v)
+            elif typ == 'DOMAIN-KEYWORD':
+                ok = v in host
+            elif typ == 'DOMAIN-WILDCARD':
+                ok = re.fullmatch(re.escape(v).replace(r'\*', '.*').replace(r'\?', '.'), host) is not None
+            else:
+                try:
+                    ok = re.search(parts[1], host) is not None
+                except re.error:
+                    ok = False
+            if ok:
+                hit = {'rule': s, 'by': 'domain'}
+        elif len(parts) >= 2 and typ in _LOOKUP_IP_TYPES:
+            if not ips:
+                continue
+            nr = any(p.lower() == 'no-resolve' for p in parts[2:])
+            if typ == 'IP-ASN':
+                ok_ip = next((ip for ip in ips if asns.get(str(ip)) == parts[1]), None)
+            elif typ == 'GEOIP':
+                ok_ip = next((ip for ip in ips if ccs.get(str(ip)) == parts[1].upper()), None)
+            else:
+                try:
+                    net = ipaddress.ip_network(parts[1], strict=False)
+                except ValueError:
+                    continue
+                ok_ip = next((ip for ip in ips if ip.version == net.version and ip in net), None)
+            if ok_ip is not None:
+                hit = {'rule': s, 'by': 'ip', 'ip': str(ok_ip), 'no_resolve': nr}
+        elif len(parts) == 1 and s:
+            v = s.lower()
+            if v[0].isdigit() or ':' in v:
+                if not ips:
+                    continue
+                try:
+                    net = ipaddress.ip_network(v, strict=False)
+                except ValueError:
+                    continue
+                ok_ip = next((ip for ip in ips if ip.version == net.version and ip in net), None)
+                if ok_ip is not None:
+                    hit = {'rule': s, 'by': 'ip', 'ip': str(ok_ip), 'no_resolve': False}
+            elif host:
+                for pfx in ('+.', '.', '*.'):
+                    if v.startswith(pfx):
+                        d = v[len(pfx):]
+                        ok = host.endswith('.' + d) or (pfx != '*.' and host == d)
+                        break
+                else:
+                    ok = host == v or (inline and host.endswith('.' + v))
+                if ok:
+                    hit = {'rule': s, 'by': 'domain'}
+        if hit:
+            total += 1
+            if len(hits) < _LOOKUP_MAX_HITS:
+                hits.append(hit)
+    return hits, total
+
+
+# --- Индекс шаблонов: поиск по ещё не добавленным --------------------------
+# Готовый индекс с api.byfox.dev/rule/index/ (собирается там раз в сутки по
+# всем шаблонам): ids.json — номер → id шаблона; domain/<sha1(ключ)[:2]>.json.gz —
+# {"suffix","exact"} по шардам; keyword/cidr/asn.json.gz. Домен ищется в шардах
+# самого имени и каждого родителя, поэтому на запрос читается пара файлов по
+# десятку КБ, а не весь индекс (целиком он ~100 МБ в памяти). Набор подменяется
+# целиком: сначала собирается рядом по sha из rule/manifest.json, потом rename.
+_TPL_INDEX_MAX_AGE = 86400
+_tpl_index_state = {'running': False, 'done': 0, 'total': 0}
+_tpl_index_lock = threading.Lock()
+_idx_mem = {}                  # rel → (mtime, данные) для мелких файлов индекса
+
+
+def _tpl_file(url):
+    return os.path.join(RULE_TPL_CACHE_DIR, hashlib.sha256(url.encode('utf-8')).hexdigest()[:20] + '.txt')
+
+
+def _tpl_meta():
+    try:
+        with open(os.path.join(RULE_INDEX_DIR, 'meta.json'), 'r') as f:
+            d = json.load(f)
+            return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def _tpl_index_sync(man):
+    """Скачать изменившиеся файлы индекса (sha из манифеста) и подменить набор."""
+    import shutil
+    want = {k[len('index/'):]: v for k, v in (man.get('files') or {}).items()
+            if k.startswith('index/') and isinstance(v, dict)}
+    if 'ids.json' not in want:
+        raise RuntimeError('в rule/manifest.json нет индекса')
+    have = _tpl_meta().get('files') or {}
+    if have == {k: v.get('sha256') for k, v in want.items()}:
+        return False
+    stage = RULE_INDEX_DIR + '.new'
+    shutil.rmtree(stage, ignore_errors=True)
+    os.makedirs(stage)
+
+    def one(rel):
+        sha = want[rel].get('sha256')
+        dst = os.path.join(stage, *rel.split('/'))
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        cur = os.path.join(RULE_INDEX_DIR, *rel.split('/'))
+        if have.get(rel) == sha and os.path.isfile(cur):
+            shutil.copyfile(cur, dst)
+        else:
+            data = _get_verified('index/' + rel, sha)
+            with open(dst, 'wb') as f:
+                f.write(data)
+        with _tpl_index_lock:
+            _tpl_index_state['done'] += 1
+
+    with _tpl_index_lock:
+        _tpl_index_state.update(done=0, total=len(want))
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        for f in [pool.submit(one, rel) for rel in want]:
+            f.result()
+    with open(os.path.join(stage, 'meta.json'), 'w') as f:
+        json.dump({'date': man.get('date') or '', 'built': int(time.time()),
+                   'files': {k: v.get('sha256') for k, v in want.items()}}, f)
+    old = RULE_INDEX_DIR + '.old'
+    shutil.rmtree(old, ignore_errors=True)
+    if os.path.isdir(RULE_INDEX_DIR):
+        os.replace(RULE_INDEX_DIR, old)
+    os.replace(stage, RULE_INDEX_DIR)
+    shutil.rmtree(old, ignore_errors=True)
+    _idx_mem.clear()
+    return True
+
+
+def _tpl_cache_prune():
+    """Из tpl_cache — всё, что не файл списка каталога. Раньше там лежали копии
+    всех ~680 шаблонов (35 МБ) для поиска; теперь поиск идёт по готовому индексу."""
+    if not os.path.isdir(RULE_TPL_CACHE_DIR):
+        return
+    keep = {'meta.json'}
+    catalog = load_rule_lists()
+    for p in RULE_PLATFORMS:
+        for e in (catalog.get(p) or []):
+            if e.get('url'):
+                keep.add(os.path.basename(_tpl_file(e['url'])))
+                rest = _tpl_rest_url(e['url'])
+                if rest:
+                    keep.add(os.path.basename(_tpl_file(rest)))
+    for fn in os.listdir(RULE_TPL_CACHE_DIR):
+        if fn not in keep and not fn.endswith('.tmp'):
+            try: os.remove(os.path.join(RULE_TPL_CACHE_DIR, fn))
+            except Exception: pass
+
+
+def _tpl_index_kick(delay=0, manifest=None):
+    """Фоном сверить индекс с api.byfox.dev. Без манифеста — только если индекса
+    нет или он сверялся больше суток назад (старт панели)."""
+    def run():
+        if delay:
+            time.sleep(delay)
+        with _tpl_index_lock:
+            if _tpl_index_state['running']:
+                return
+            _tpl_index_state['running'] = True
+        try:
+            man = manifest
+            if man is None:
+                meta = _tpl_meta()
+                if meta and time.time() - (meta.get('checked') or meta.get('built') or 0) < _TPL_INDEX_MAX_AGE:
+                    return
+                man = _rule_manifest()
+            if not _tpl_items():
+                _bm7_sync_core(man)    # каталог нужен поиску так же, как индекс
+            _tpl_index_sync(man)
+            meta = _tpl_meta()
+            if meta:
+                meta['checked'] = int(time.time())
+                with open(os.path.join(RULE_INDEX_DIR, 'meta.json'), 'w') as f:
+                    json.dump(meta, f)
+            _tpl_cache_prune()
+        except Exception as e:
+            print(f'[rules] индекс шаблонов: {e}', flush=True)
+        finally:
+            with _tpl_index_lock:
+                _tpl_index_state['running'] = False
+    threading.Thread(target=run, daemon=True).start()
+
+
+def _tpl_index_status():
+    meta = _tpl_meta()
+    with _tpl_index_lock:
+        st = dict(_tpl_index_state)
+    return {'building': st['running'] and not meta, 'done': st['done'], 'total': st['total'],
+            'ready': bool(meta), 'built': meta.get('built') or 0, 'date': meta.get('date') or ''}
+
+
+def _idx_read(rel, keep=True):
+    """Файл индекса (json или json.gz). keep — держать в памяти до смены mtime."""
+    path = os.path.join(RULE_INDEX_DIR, *rel.split('/'))
+    try:
+        mt = os.path.getmtime(path)
+    except OSError:
+        return None
+    hit = _idx_mem.get(rel)
+    if hit and hit[0] == mt:
+        return hit[1]
+    opener = gzip.open if rel.endswith('.gz') else open
+    with opener(path, 'rt', encoding='utf-8') as f:
+        data = json.load(f)
+    if keep:
+        _idx_mem[rel] = (mt, data)
+    return data
+
+
+def _tpl_index_hits(host, ips, asns):
+    """{номер шаблона: [hit, …]} по индексу. hit — как у _lookup_scan."""
+    out = {}
+
+    def add(nums, hit):
+        for n in nums or ():
+            out.setdefault(n, []).append(hit)
+
+    if host:
+        parts = host.split('.')
+        for i in range(len(parts)):
+            key = '.'.join(parts[i:])
+            shard = _idx_read(f'domain/{hashlib.sha1(key.encode("utf-8")).hexdigest()[:2]}.json.gz',
+                              keep=False) or {}
+            if i == 0:
+                add((shard.get('exact') or {}).get(key), {'rule': f'DOMAIN,{key}', 'by': 'domain'})
+            add((shard.get('suffix') or {}).get(key), {'rule': f'DOMAIN-SUFFIX,{key}', 'by': 'domain'})
+        for kw, nums in (_idx_read('keyword.json.gz') or {}).items():
+            if kw and kw in host:
+                add(nums, {'rule': f'DOMAIN-KEYWORD,{kw}', 'by': 'domain'})
+    if ips:
+        asn_idx = _idx_read('asn.json.gz') or {}
+        for ip in ips:
+            a = asns.get(str(ip))
+            if a and a in asn_idx:
+                add(asn_idx[a], {'rule': f'IP-ASN,{a}', 'by': 'ip', 'ip': str(ip), 'no_resolve': False})
+        # CIDR — самый тяжёлый файл (~11 МБ в памяти): читаем на запрос и отпускаем.
+        nets = _idx_read('cidr.json.gz', keep=False) or {}
+        for key, typ in (('cidr', 'IP-CIDR'), ('cidr6', 'IP-CIDR6')):
+            fam = [ip for ip in ips if ip.version == (4 if key == 'cidr' else 6)]
+            if not fam:
+                continue
+            for net_s, nums in nets.get(key) or ():
+                try:
+                    net = ipaddress.ip_network(net_s, strict=False)
+                except ValueError:
+                    continue
+                ok_ip = next((ip for ip in fam if ip in net), None)
+                if ok_ip is not None:
+                    add(nums, {'rule': f'{typ},{net_s}', 'by': 'ip', 'ip': str(ok_ip), 'no_resolve': False})
+    return out
+
+
+def _tpl_lookup_templates(host, ips, asns, catalog):
+    """Шаблоны, которых нет в каталоге и которые покрывают адрес."""
+    try:
+        ids = (_idx_read('ids.json') or {}).get('ids') or []
+        hits = _tpl_index_hits(host, ips, asns)
+    except Exception as e:
+        print(f'[rules] поиск по индексу шаблонов: {e}', flush=True)
+        return []
+    by_id = {i['id']: i for i in _tpl_items()}
+    base = _tpl_base()
+    added = {_rule_url_for_platform(e.get('url') or '', 'clash').lower()
+             for p in RULE_PLATFORMS for e in (catalog.get(p) or []) if e.get('url')}
+    out = []
+    for n, hs in hits.items():
+        tid = ids[n] if 0 <= n < len(ids) else None
+        it = by_id.get(tid)
+        if not it or it.get('hidden'):
+            continue
+        files = it.get('files') or {}
+        rel = files.get('clash') or next(iter(files.values()), '')
+        url = base + rel if rel else ''
+        if not url or url.lower() in added:
+            continue
+        out.append({'name': it.get('name') or tid, 'id': tid, 'title': it.get('title') or {},
+                    'own': it.get('src') == 'byfox', 'url': url,
+                    'hits': hs[:_LOOKUP_MAX_HITS], 'total': len(hs)})
+    out.sort(key=lambda t: (not t['own'], t['name'].lower()))
+    return out
+
+
+@bp.route('/api/xray/rule-templates/find', methods=['GET'])
+@_auth
+def xray_rule_templates_find():
+    """Какие шаблоны покрывают домен или IP — для поиска в пикере «Шаблоны».
+    Только по индексу, без DNS и без файлов каталога: ответ за миллисекунды.
+    → {'ids': {id шаблона: первое совпавшее правило}, 'ready': индекс есть}."""
+    host, ips = _lookup_parse_query(request.args.get('q'))
+    st = _tpl_index_status()
+    if host is None or not st['ready']:
+        if not st['ready']:
+            _tpl_index_kick()
+        return jsonify({'ids': {}, 'ready': st['ready']})
+    asns = {}
+    for ip in ips:
+        g = (geo_asn_full(ip) if geo_asn_full else None) or {}
+        if g.get('asn'):
+            asns[ip] = str(g['asn'])
+    try:
+        ids = (_idx_read('ids.json') or {}).get('ids') or []
+        hits = _tpl_index_hits(host, [ipaddress.ip_address(i) for i in ips], asns)
+    except Exception as e:
+        return jsonify({'ids': {}, 'ready': True, 'error': str(e)[:200]})
+    return jsonify({'ids': {ids[n]: hs[0]['rule'] for n, hs in hits.items() if 0 <= n < len(ids)},
+                    'ready': True})
+
+
+@bp.route('/api/xray/rule-lookup', methods=['GET'])
+@_auth
+def xray_rule_lookup():
+    """В какие записи каталогов 'lists' и 'global' попадает домен или IP."""
+    host, ips = _lookup_parse_query(request.args.get('q'))
+    if host is None:
+        return jsonify({'error': 'Нужен домен или IP, например youtube.com'}), 400
+    dns_error = None
+    if host:
+        ips, dns_error = _lookup_resolve(host)
+    ips = [str(ipaddress.ip_address(ip.split('%')[0])) for ip in ips[:16]]
+    ip_info, asns, ccs = [], {}, {}
+    for ip in ips:
+        g = (geo_asn_full(ip) if geo_asn_full else None) or {}
+        ip_info.append({'ip': ip, 'cc': g.get('cc') or '', 'country': g.get('country') or '',
+                        'asn': g.get('asn'), 'org': g.get('org') or ''})
+        if g.get('asn'):
+            asns[ip] = str(g['asn'])
+        if g.get('cc'):
+            ccs[ip] = str(g['cc']).upper()
+    ip_objs = [ipaddress.ip_address(ip) for ip in ips]
+
+    catalog = load_rule_lists()
+    jobs = [(p, i, e) for p in RULE_PLATFORMS for i, e in enumerate(catalog.get(p) or [])]
+
+    # Файлы каталога: свежая копия — сразу; нет или старая — докачка (одна на URL,
+    # сколько бы опросов ни пришло), ждём её не дольше дедлайна. Не успела — берём
+    # старую копию, а без копии запись уходит в «ещё качаются». У domain-set
+    # шаблона в профиль уходит и его rest — проверяем оба файла.
+    def entry_urls(e):
+        if not e.get('url'):
+            return []
+        rest = _tpl_rest_url(e['url'])
+        return [e['url'], rest] if rest else [e['url']]
+
+    texts, waits, errors = {}, {}, {}
+    for _, _, e in jobs:
+        for url in entry_urls(e):
+            if url in texts or url in waits:
+                continue
+            age = _rules_age(url)
+            if age is not None and age < _RULES_FRESH:
+                texts[url] = _rules_cached(url)
+                continue
+            waits[url] = _rules_download(url)
+    if waits:
+        wait(list(waits.values()), timeout=_LOOKUP_DEADLINE)
+    for url, f in waits.items():
+        if f.done() and f.exception() is not None:
+            errors[url] = str(f.exception())[:200]
+        text = _rules_cached(url)
+        if text is not None:
+            texts[url] = text
+
+    out = {p: [] for p in RULE_PLATFORMS}
+    pending, pending_urls = [], set()
+    for p, i, e in jobs:
+        base = {'id': e['id'], 'name': e.get('name') or e['id'], 'prio': i + 1,
+                'policy': e.get('policy') or 'proxy'}
+        if e.get('rules'):
+            hits, total = _lookup_scan('\n'.join(e['rules']), True, host, ip_objs, asns, ccs)
+            if hits:
+                out[p].append(dict(base, hits=hits, total=total))
+            continue
+        urls = entry_urls(e)
+        if not urls:
+            continue
+        if urls[0] in errors:
+            out[p].append(dict(base, error=errors[urls[0]]))
+            continue
+        if any(texts.get(u) is None for u in urls):
+            if urls[0] not in pending_urls:   # Lists и Global делят файлы — имя один раз
+                pending_urls.add(urls[0])
+                pending.append(dict(base, platform=p))
+            continue
+        hits, total = [], 0
+        for u in urls:
+            h, t = _lookup_scan(texts[u], False, host, ip_objs, asns, ccs)
+            hits += h
+            total += t
+        if hits:
+            out[p].append(dict(base, hits=hits[:_LOOKUP_MAX_HITS], total=total))
+
+    # Не добавленные шаблоны — по готовому индексу api.byfox.dev.
+    tpl_state = _tpl_index_status()
+    if not tpl_state['ready']:
+        _tpl_index_kick()
+    templates = _tpl_lookup_templates(host, ip_objs, asns, catalog) if tpl_state['ready'] else []
+    return jsonify({'host': host, 'ips': ip_info, 'dns_error': dns_error,
+                    'lists': out.get('lists', []), 'global': out.get('global', []),
+                    'pending': pending, 'checked': len(jobs),
+                    'templates': templates, 'tpl_index': tpl_state})
 
 
 @bp.route('/api/xray/rule-lists', methods=['POST'])

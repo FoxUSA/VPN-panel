@@ -8133,6 +8133,8 @@ let _healthTimer = null;
 function openHealthModal() {
   document.getElementById('healthModal').classList.remove('hidden');
   switchHealthTab('load');
+  _hhSyncRangeBtns();
+  loadHealthHist();
   const cached = _readModalCache('health');
   if (cached && typeof cached === 'object') {
     _paintHealth(cached);
@@ -8149,6 +8151,8 @@ function openHealthModal() {
     // каждые 4 секунды незачем: там ss, ufw и fail2ban-client, а данные статичны.
     if (_healthTab !== 'load') return;
     loadHealth({silent: true});
+    // История пишется раз в 10 с — чаще перечитывать нечего.
+    if (Date.now() - _hhAt >= 10000) loadHealthHist();
   }, 4000);
 }
 
@@ -8170,6 +8174,8 @@ function switchHealthTab(kind) {
   if (btn) btn.classList.toggle('hidden', kind !== 'load');
   if (kind === 'mon') loadProbeInfo();
   if (kind === 'fw') loadFirewall();
+  // Графики рисуются по ширине контейнера — у скрытой вкладки она нулевая.
+  if (kind === 'load' && _hhData) _hhPaint();
 }
 
 // ============================================================
@@ -8558,13 +8564,11 @@ async function loadProbeInfo() {
 
 function _probeRow(label, value, hint, copyIdx) {
   const btn = copyIdx == null ? '' :
-    '<button class="btn btn-sm btn-ghost" data-copy="' + copyIdx + '" style="flex:0 0 auto;">Копировать</button>';
-  return '<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid var(--border);">' +
-    '<div style="flex:0 0 150px;color:var(--text3);font-size:12px;">' + escHtml(label) + '</div>' +
-    '<div style="flex:1 1 auto;min-width:0;font-family:JetBrains Mono,monospace;font-size:13px;' +
-      'word-break:break-all;user-select:all;">' + escHtml(value) +
-      (hint ? '<div style="font-family:inherit;font-size:11px;color:var(--text3);margin-top:2px;">' +
-              escHtml(hint) + '</div>' : '') +
+    '<button class="btn btn-sm btn-ghost" data-copy="' + copyIdx + '">Копировать</button>';
+  return '<div class="probe-row' + (btn ? ' has-btn' : '') + '">' +
+    '<div class="probe-l">' + escHtml(label) + '</div>' +
+    '<div class="probe-v"><span class="probe-val">' + escHtml(value) + '</span>' +
+      (hint ? '<div class="probe-h">' + escHtml(hint) + '</div>' : '') +
     '</div>' + btn + '</div>';
 }
 
@@ -8810,6 +8814,345 @@ function renderHealth(h) {
     <div class="health-footer">
       Аптайм: ${escHtml(_hUptime(h.uptime_sec))}${h.proc_count != null ? ' &middot; процессов: ' + h.proc_count : ''}
     </div>`;
+}
+
+// === История нагрузки: графики за период ===================================
+// Данные — /api/system/monitor?range=1h|24h|7d|30d|90d (modules/sys_health.py):
+// точки графика (среднее + пик за шаг), сводка за окно и за такое же окно до
+// него, рекорды за всё время. Порт страницы servermon, нарисованный в теме панели.
+let _hhRange = '24h', _hhData = null, _hhAt = 0, _hhResizeT = null;
+// Курсор на графике — автообновление не перерисовывает (иначе гаснет подсказка),
+// свежие данные рисуем, когда курсор уйдёт.
+let _hhHover = false, _hhPending = false;
+try { const r = localStorage.getItem('awgPanel:healthRange'); if (r) _hhRange = r; } catch (_) {}
+
+const _HH_PREV_NAME = {'1h': 'Прошлый час', '24h': 'Прошлые 24 ч', '7d': 'Прошлые 7 дней',
+                       '30d': 'Прошлые 30 дней', '90d': 'Прошлые 90 дней'};
+const _hhLong = r => r === '7d' || r === '30d' || r === '90d';   // точки часовые — подписи датами
+
+function hhSetRange(rng) {
+  _hhRange = rng;
+  try { localStorage.setItem('awgPanel:healthRange', rng); } catch (_) {}
+  _hhSyncRangeBtns();
+  const cached = _readModalCache('healthHist:' + rng);
+  if (cached && cached.series) { _hhData = cached; _hhPaint(); }
+  loadHealthHist();
+}
+
+function _hhSyncRangeBtns() {
+  document.querySelectorAll('#hhRange button').forEach(b =>
+    b.classList.toggle('active', b.dataset.range === _hhRange));
+}
+
+async function loadHealthHist() {
+  const rng = _hhRange;
+  const box = document.getElementById('healthHist');
+  if (!box) return;
+  _hhAt = Date.now();
+  if (!box.hasChildNodes()) {
+    const cached = _readModalCache('healthHist:' + rng);
+    if (cached && cached.series) { _hhData = cached; _hhPaint(); }
+    else box.innerHTML = '<div class="health-sub">…</div>';
+  }
+  try {
+    const r = await fetch(API + '/api/system/monitor?range=' + rng, {credentials: 'same-origin'});
+    if (rng !== _hhRange) return;              // пока шёл запрос, переключили период
+    const d = await r.json().catch(() => null);
+    if (!r.ok || !d || d.ok === false) {
+      if (!_hhData) box.innerHTML = '<div class="health-sub" style="color:var(--red);">' +
+        escHtml((d && d.error) || ('Ошибка ' + r.status)) + '</div>';
+      return;
+    }
+    _hhData = d;
+    _writeModalCache('healthHist:' + rng, d);
+    if (_hhHover) _hhPending = true; else _hhPaint();
+  } catch (e) {
+    if (!_hhData) box.innerHTML = '<div class="health-sub" style="color:var(--red);">Сеть: ' + escHtml(e.message) + '</div>';
+  }
+}
+
+window.addEventListener('resize', () => {
+  const m = document.getElementById('healthModal');
+  if (!_hhData || !m || m.classList.contains('hidden')) return;
+  clearTimeout(_hhResizeT);
+  _hhResizeT = setTimeout(_hhPaint, 150);
+});
+
+// Форматтеры: одна-две значащие десятые для маленьких чисел.
+function _hhB(n) {
+  n = Math.max(0, n || 0);
+  const u = _i18nEn() ? ['B', 'KB', 'MB', 'GB', 'TB'] : ['Б', 'КБ', 'МБ', 'ГБ', 'ТБ'];
+  let i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return (i === 0 || n >= 100 ? Math.round(n) : n >= 10 ? n.toFixed(1).replace(/\.0$/, '')
+    : n.toFixed(2).replace(/\.?0+$/, '')) + ' ' + u[i];
+}
+const _hhRate = n => _hhB(n) + (_i18nEn() ? '/s' : '/с');
+const _hhPct = n => ((n || 0) >= 10 || !n ? Math.round(n || 0) : n.toFixed(1)) + '%';
+const _hhLoad = n => (n || 0).toFixed(2);
+function _hhT(t, withDate) {
+  const d = new Date(t * 1000), p = x => String(x).padStart(2, '0');
+  const hm = p(d.getHours()) + ':' + p(d.getMinutes());
+  return withDate ? p(d.getDate()) + '.' + p(d.getMonth() + 1) + ' ' + hm : hm;
+}
+const _hhDay = t => { const d = new Date(t * 1000), p = x => String(x).padStart(2, '0');
+  return p(d.getDate()) + '.' + p(d.getMonth() + 1); };
+
+// Сдвиг к прошлому периоду: у процентов — в п.п., у остального — в %.
+function _hhDelta(cur, prev, pct) {
+  if (prev == null || cur == null) return '<div class="hh-ms-d">нет данных</div>';
+  const d = pct ? cur - prev : (prev > 0 ? (cur - prev) / prev * 100 : (cur > 0 ? 100 : 0));
+  if (Math.abs(d) < (pct ? 0.5 : 3)) return '<div class="hh-ms-d">≈ как раньше</div>';
+  const up = d > 0, v = Math.abs(d);
+  const txt = pct ? (v >= 10 ? Math.round(v) : v.toFixed(1)) + (_i18nEn() ? ' pp' : ' п.п.')
+                  : (v >= 999 ? '>999' : Math.round(v)) + '%';
+  return `<div class="hh-ms-d ${up ? 'up' : 'down'}">${up ? '▲ +' : '▼ −'}${txt}</div>`;
+}
+
+// Три плашки: среднее (и сдвиг), пик (и когда), прошлый период.
+// name — чья метрика, когда в карточке их две (входящий/исходящий).
+function _hhStats(d, key, fmt, pct, name) {
+  const cur = d.cur.stats[key], prev = d.prev.stats[key];
+  const when = cur ? _hhT(cur.max_t, d.range !== '1h') : '—';
+  return `${name ? `<div class="hh-stats-n">${name}</div>` : ''}<div class="hh-stats">
+    <div class="hh-ms"><div class="hh-ms-l">Среднее</div>
+      <div class="hh-ms-v">${cur ? fmt(cur.avg) : '—'}</div>${_hhDelta(cur && cur.avg, prev && prev.avg, pct)}</div>
+    <div class="hh-ms"><div class="hh-ms-l">Пик</div>
+      <div class="hh-ms-v">${cur ? fmt(cur.max) : '—'}</div><div class="hh-ms-d">${when}</div></div>
+    <div class="hh-ms" title="${_HH_PREV_NAME[d.range] || ''}"><div class="hh-ms-l">Раньше</div>
+      <div class="hh-ms-v">${prev ? fmt(prev.avg) : '—'}</div>
+      <div class="hh-ms-d">${prev ? '<span>пик</span> ' + fmt(prev.max) : '<span>данных ещё нет</span>'}</div></div>
+  </div>`;
+}
+
+function _hhCard(title, sub, stats, chart) {
+  const legend = chart.series.map(s =>
+    `<span><i class="${s.dash ? 'dash' : ''}" style="border-color:${s.color}"></i>${escHtml(s.label)}</span>`).join('');
+  return {chart, html: `<div class="health-card hh-card">
+      <div class="health-card-title">${title}</div>
+      ${sub ? `<div class="health-sub hh-sub">${sub}</div>` : ''}
+      ${stats}
+      <div class="hh-legend">${legend}</div>
+      <div class="hh-chart" id="hhChart_${chart.id}"></div>
+    </div>`};
+}
+
+function _hhPaint() {
+  const box = document.getElementById('healthHist');
+  const d = _hhData;
+  if (!box || !d) return;
+  _hhSyncRangeBtns();
+  const info = d.info || {}, n = d.now || {};
+  const C1 = 'var(--accent)', C2 = 'var(--orange)';
+  if (!d.now && !(d.series || []).length) {
+    box.innerHTML = '<div class="health-sub hh-empty">История копится: замер раз в 10 секунд, первая точка ' +
+      'графика появится через минуту после запуска панели.</div>';
+    return;
+  }
+
+  const cpu = _hhCard('Процессор', '', _hhStats(d, 'cpu', _hhPct, true),
+    {id: 'cpu', fmt: _hhPct, yMax: 100, series: [
+      {k: 'c', label: 'среднее', color: C1, area: true},
+      {k: 'cm', label: 'пик', color: C1, dash: true}]});
+
+  // Load average — очередь задач к процессору. Выше числа ядер — задачи ждут;
+  // пунктир на графике — эта граница.
+  const load = _hhCard('Средняя нагрузка (load average)',
+    'Очередь задач к процессору. Оранжевый пунктир — число ядер: выше него задачи ждут.',
+    _hhStats(d, 'load', _hhLoad, false),
+    {id: 'load', fmt: _hhLoad, ref: info.cores, series: [
+      {k: 'l', label: 'среднее', color: C1, area: true},
+      {k: 'lm', label: 'пик', color: C1, dash: true}]});
+
+  const memSeries = [{k: 'm', label: 'среднее', color: C1, area: true},
+                     {k: 'mm', label: 'пик', color: C1, dash: true}];
+  if (n.swap_total) memSeries.push({k: 's', label: 'подкачка', color: C2});
+  const ram = _hhCard('ОЗУ', 'Занятая память без кэша — кэш система отдаёт программам по требованию.',
+    _hhStats(d, 'mem', _hhB, false),
+    {id: 'mem', fmt: _hhB, yMax: n.mem_total, series: memSeries});
+
+  const tr = p => p.samples ? `↓ ${_hhB(p.rx_bytes)} · ↑ ${_hhB(p.tx_bytes)}` : '—';
+  const net = _hhCard('Сеть' + (info.iface ? '<span class="hh-iface"> · ' + escHtml(info.iface) + '</span>' : ''),
+    `<span>Трафик за период:</span> ${tr(d.cur)}<br><span>Раньше:</span> ${tr(d.prev)}`,
+    _hhStats(d, 'rx', _hhRate, false, 'Входящий') + _hhStats(d, 'tx', _hhRate, false, 'Исходящий'),
+    {id: 'net', fmt: _hhRate, series: [
+      {k: 'rx', label: 'входящий ↓', color: C1, area: true, peak: 'rxm'},
+      {k: 'tx', label: 'исходящий ↑', color: C2, peak: 'txm'}]});
+
+  const dd = d.cur.disk_delta || 0;
+  const ddTxt = Math.abs(dd) < 1048576 ? '<span>почти не менялось</span>'
+    : (dd > 0 ? '+' : '−') + _hhB(Math.abs(dd));
+  const disk = _hhCard('Диск', `<span>Занятое место за период:</span> ${ddTxt}`,
+    _hhStats(d, 'rd', _hhRate, false, 'Чтение') + _hhStats(d, 'wr', _hhRate, false, 'Запись'),
+    {id: 'disk', fmt: _hhRate, series: [
+      {k: 'rd', label: 'чтение', color: C1, area: true, peak: 'rdm'},
+      {k: 'wr', label: 'запись', color: C2, peak: 'wrm'}]});
+
+  const cards = [cpu, load, ram, net, disk];
+  box.innerHTML = cards.map(c => c.html).join('') + _hhRecords(d.records || {});
+  cards.forEach(c => _hhDraw(document.getElementById('hhChart_' + c.chart.id), d, c.chart));
+}
+
+function _hhRecords(r) {
+  const rows = [
+    ['cpu', 'Процессор', _hhPct], ['load', 'Средняя нагрузка', _hhLoad], ['mem', 'ОЗУ', _hhB],
+    ['rx', 'Сеть, входящий', _hhRate], ['tx', 'Сеть, исходящий', _hhRate],
+    ['rd', 'Диск, чтение', _hhRate], ['wr', 'Диск, запись', _hhRate],
+  ].filter(([k]) => r[k]);
+  if (!rows.length) return '';
+  return `<div class="health-card hh-card hh-rec">
+    <div class="health-card-title">Рекорды за всё время</div>
+    ${rows.map(([k, label, f]) => `<div class="hh-rec-row"><span class="hh-rec-l">${label}</span>
+      <span class="hh-rec-v">${f(r[k].v)}</span><span class="hh-rec-t">${_hhT(r[k].t, true)}</span></div>`).join('')}
+    <div class="health-sub">Максимум одного 10-секундного замера с начала сбора.</div>
+  </div>`;
+}
+
+// «Круглая» верхняя граница шкалы (1, 2, 2.5, 5 × 10ⁿ; для байт — в своей единице).
+function _hhNiceMax(v, bytes) {
+  if (!(v > 0)) return 1;
+  let base = 1;
+  if (bytes) while (v / base >= 1024) base *= 1024;
+  const x = v / base, p = Math.pow(10, Math.floor(Math.log10(x)));
+  const m = [1, 2, 2.5, 5, 10].find(k => k * p >= x * 1.08) || 10;
+  return m * p * base;
+}
+
+function _hhSvg(tag, attrs) {
+  const e = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  return e;
+}
+
+// Линии и области на SVG. Ось X — всё окно, чтобы простои были видны разрывами;
+// разрыв — пропуск дольше двух с половиной шагов.
+function _hhDraw(box, d, cfg) {
+  if (!box) return;
+  const W = box.clientWidth || 360, H = box.clientHeight || 140;
+  const padL = 44, padR = 6, padT = 8, padB = 20;
+  const iw = W - padL - padR, ih = H - padT - padB;
+  const pts = d.series || [];
+  const from = d.cur.from, to = d.cur.to, step = d.step;
+  const svg = _hhSvg('svg', {viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: 'none'});
+  const bytes = cfg.fmt === _hhB || cfg.fmt === _hhRate;
+
+  let top = cfg.yMax, m = 0;
+  pts.forEach(p => cfg.series.forEach(s => { m = Math.max(m, p[s.k] || 0); }));
+  if (!top) top = _hhNiceMax(m, bytes);
+  // Процессор: шкала не всегда до 100% — иначе 3% нагрузки сливаются с нулём.
+  else if (cfg.fmt === _hhPct) top = m > 50 ? 100 : _hhNiceMax(Math.max(m, 5), false);
+  const X = t => padL + (t - from) / (to - from) * iw;
+  const Y = v => padT + ih - Math.min(1, Math.max(0, v / top)) * ih;
+
+  [0, 0.5, 1].forEach(f => {
+    const y = padT + ih - f * ih;
+    svg.appendChild(_hhSvg('line', {x1: padL, x2: W - padR, y1: y, y2: y, class: 'hh-grid-l'}));
+    const t = _hhSvg('text', {x: padL - 6, y: y + 3.5, 'text-anchor': 'end', class: 'hh-ax'});
+    t.textContent = cfg.fmt(top * f).replace(/\/[сs]$/, '');
+    svg.appendChild(t);
+  });
+  // Граница «число ядер» у load — только если попадает в шкалу, иначе при
+  // нагрузке 0.2 на 4 ядрах график сплющился бы в ноль.
+  if (cfg.ref && cfg.ref <= top) {
+    const y = Y(cfg.ref);
+    svg.appendChild(_hhSvg('line', {x1: padL, x2: W - padR, y1: y, y2: y, class: 'hh-ref'}));
+  }
+  const long = _hhLong(d.range);
+  const nx = W < 420 ? 3 : 5;
+  for (let i = 0; i <= nx; i++) {
+    const t = from + (to - from) * i / nx;
+    const el = _hhSvg('text', {x: X(t), y: H - 5, class: 'hh-ax',
+      'text-anchor': i === 0 ? 'start' : i === nx ? 'end' : 'middle'});
+    el.textContent = long ? _hhDay(t) : _hhT(t);
+    svg.appendChild(el);
+  }
+
+  if (!pts.length) {
+    const t = _hhSvg('text', {x: padL + iw / 2, y: padT + ih / 2, 'text-anchor': 'middle', class: 'hh-nodata'});
+    t.textContent = 'Данные копятся';
+    svg.appendChild(t);
+    box.replaceChildren(svg);
+    return;
+  }
+
+  const segs = [];
+  let seg = [];
+  pts.forEach((p, i) => {
+    if (i > 0 && p.t - pts[i - 1].t > step * 2.5) { segs.push(seg); seg = []; }
+    seg.push(p);
+  });
+  segs.push(seg);
+  const mid = p => X(Math.min(to, p.t + step / 2));      // точка — в середине шага
+
+  cfg.series.filter(s => s.area).forEach(s => segs.forEach(sg => {
+    if (!sg.length) return;
+    let dd = `M${mid(sg[0]).toFixed(1)},${Y(0).toFixed(1)}`;
+    sg.forEach(p => { dd += `L${mid(p).toFixed(1)},${Y(p[s.k] || 0).toFixed(1)}`; });
+    dd += `L${mid(sg[sg.length - 1]).toFixed(1)},${Y(0).toFixed(1)}Z`;
+    svg.appendChild(_hhSvg('path', {d: dd, fill: s.color, 'fill-opacity': 0.14, stroke: 'none'}));
+  }));
+  cfg.series.forEach(s => segs.forEach(sg => {
+    if (!sg.length) return;
+    const a = {d: sg.map((p, i) => (i ? 'L' : 'M') + mid(p).toFixed(1) + ',' + Y(p[s.k] || 0).toFixed(1)).join(''),
+               fill: 'none', stroke: s.color, 'stroke-width': s.dash ? 1.25 : 2,
+               'stroke-linejoin': 'round', 'stroke-linecap': 'round'};
+    if (s.dash) { a['stroke-dasharray'] = '3 3'; a['stroke-opacity'] = 0.75; }
+    if (sg.length === 1) { a.d += 'l0.01,0'; a['stroke-width'] = 4; }   // одиночная точка
+    svg.appendChild(_hhSvg('path', a));
+  }));
+
+  // Слой наведения: перекрестие, точки на линиях, подсказка.
+  const xh = _hhSvg('line', {y1: padT, y2: padT + ih, class: 'hh-xh', visibility: 'hidden'});
+  svg.appendChild(xh);
+  const marks = cfg.series.map(s => {
+    const c = _hhSvg('circle', {r: 4, fill: s.color, class: 'hh-mark', visibility: 'hidden'});
+    svg.appendChild(c);
+    return c;
+  });
+  const tip = document.createElement('div');
+  tip.className = 'hh-tip';
+  tip.hidden = true;
+  box.replaceChildren(svg, tip);
+
+  const hide = () => { tip.hidden = true; xh.setAttribute('visibility', 'hidden');
+                       marks.forEach(mk => mk.setAttribute('visibility', 'hidden')); };
+  const move = ev => {
+    const r = svg.getBoundingClientRect();
+    const x = (ev.clientX - r.left) * (W / r.width);
+    if (x < padL - 4 || x > W - padR + 4) { hide(); return; }
+    let best = pts[0], bd = Infinity;
+    pts.forEach(p => { const dx = Math.abs(mid(p) - x); if (dx < bd) { bd = dx; best = p; } });
+    const px = mid(best);
+    xh.setAttribute('x1', px); xh.setAttribute('x2', px); xh.setAttribute('visibility', 'visible');
+    cfg.series.forEach((s, i) => {
+      marks[i].setAttribute('cx', px); marks[i].setAttribute('cy', Y(best[s.k] || 0));
+      marks[i].setAttribute('visibility', 'visible');
+    });
+    const span = step >= 3600 ? `${_hhT(best.t, true)} — ${_hhT(best.t + step)}`
+      : step > 60 ? `${_hhT(best.t, d.range !== '1h')} — ${_hhT(best.t + step)}` : _hhT(best.t);
+    tip.innerHTML = `<div class="hh-tip-t">${span}</div>` + cfg.series.map(s => {
+      const pk = s.peak && best[s.peak] != null
+        ? `<span class="hh-tip-pk"><span>пик</span> ${cfg.fmt(best[s.peak])}</span>` : '';
+      return `<div class="hh-tip-r"><i style="background:${s.color}"></i><span>${escHtml(s.label)}</span>` +
+             `<b>${cfg.fmt(best[s.k] || 0)}</b>${pk}</div>`;
+    }).join('');
+    tip.hidden = false;
+    // Справа от курсора, не влезает — слева, не влезает и так (телефон) —
+    // прижимаем к краю графика: за карточку подсказка не вылезает.
+    const tw = tip.offsetWidth, bx = px * (r.width / W);
+    let left = bx + 12;
+    if (left + tw > r.width) left = bx - tw - 12;
+    tip.style.left = Math.max(0, Math.min(left, r.width - tw)) + 'px';
+  };
+  svg.addEventListener('pointermove', move);
+  svg.addEventListener('pointerdown', move);
+  svg.addEventListener('pointerenter', () => { _hhHover = true; });
+  svg.addEventListener('pointerleave', ev => {
+    // Касание: leave приходит сразу после отрыва пальца — подсказку оставляем.
+    if (ev.pointerType !== 'touch') hide();
+    _hhHover = false;
+    if (_hhPending) { _hhPending = false; _hhPaint(); }
+  });
 }
 
 function openDepsModal() {
@@ -10583,16 +10926,38 @@ async function loadRuleListCatalogInto() {
 // _rule_url_for_platform(), чтобы в UI были ровно те пути, что уедут в конфиг.
 let _rmUrlPlatform = 'clash';
 
+// Старые адреса шаблонов (GitHub, byfox.dev/data) → api.byfox.dev, хвост тот же.
+// Зеркало серверного _migrate_rule_url: каталог сервер переписывает сам, а здесь —
+// чтобы в UI сразу был новый адрес, даже из старого кэша.
+const _OLD_RULE_PREFIXES = [
+  ['https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/', 'bm7/'],
+  ['https://cdn.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/', 'bm7/'],
+  ['https://byfox.dev/data/awg-panel/rules/', 'byfox/'],
+];
+function _migrateRuleUrl(url) {
+  for (const [old, nw] of _OLD_RULE_PREFIXES) {
+    if (url && url.startsWith(old)) return 'https://api.byfox.dev/rule/' + nw + url.slice(old.length);
+  }
+  return url;
+}
+
 function _ruleUrlForPlatform(url, platform) {
   if (!url) return url;
-  // Свои шаблоны byfox: /rules/<name>/{clash/rules.yaml | loon|shadowrocket/rules.list}
-  let m = url.match(/^(https?:\/\/\S+\/data\/awg-panel\/rules\/[^/]+)\/(?:clash|loon|shadowrocket)\/rules\.(?:yaml|list)$/);
+  url = _migrateRuleUrl(url);
+  // Шаблон из каталога — путь из его files/rest (у платформы бывает свой файл).
+  const hit = _tplUrlIndex().get(url.toLowerCase());
+  if (hit) {
+    const rel = (hit.it[hit.kind] || {})[_tplPlat(platform)];
+    if (rel) return _tplBase + rel;
+  }
+  // Свои шаблоны byfox: /rule/byfox/<name>/{clash/rules.yaml | loon|shadowrocket/rules.list}
+  let m = url.match(/^(https?:\/\/\S+\/rule\/byfox\/[^/]+)\/(?:clash|loon|shadowrocket)\/rules\.(?:yaml|list)$/);
   if (m) {
     if (platform === 'clash') return `${m[1]}/clash/rules.yaml`;
     return `${m[1]}/${platform === 'shadowrocket' ? 'shadowrocket' : 'loon'}/rules.list`;
   }
-  // blackmatrix7: /rule/{Shadowrocket|Loon|Clash}/<Name>/<Name>.{list|yaml}
-  m = url.match(/^(https?:\/\/\S+\/rule)\/(?:Shadowrocket|Loon|Clash)\/(.+?)\/([^/]+)\.(?:list|yaml)$/);
+  // blackmatrix7 (зеркало): /rule/bm7/{Shadowrocket|Loon|Clash}/<Name>/<Name>.{list|yaml}
+  m = url.match(/^(https?:\/\/\S+\/rule\/bm7)\/(?:Shadowrocket|Loon|Clash)\/(.+?)\/([^/]+)\.(?:list|yaml)$/);
   if (m) {
     if (platform === 'clash') return `${m[1]}/Clash/${m[2]}/${m[3]}.yaml`;
     return `${m[1]}/${platform === 'shadowrocket' ? 'Shadowrocket' : 'Loon'}/${m[2]}/${m[3]}.list`;
@@ -10718,6 +11083,200 @@ function toggleRmSort() {
 function onRmSearch(v) {
   _rmQuery = v || '';
   renderRuleListManager();
+}
+
+// «Домен или IP»: в какие записи каталога и в какие ещё не добавленные шаблоны
+// попадает адрес. Сервер резолвит домен сам, поэтому видны и IP-CIDR / IP-ASN /
+// GEOIP совпадения. Индекс шаблонов собирается фоном при первом поиске — пока он
+// строится, переспрашиваем сервер, и блок «Шаблоны» дополняется сам.
+let _rmLookupSeq = 0;
+let _rmLookupTimer = null;
+let _rmLookupLast = null;
+
+function onRmLookupInput(v) {
+  if (!(v || '').trim()) clearRuleLookup();
+}
+
+function clearRuleLookup() {
+  _rmLookupSeq++;
+  clearTimeout(_rmLookupTimer);
+  _rmLookupLast = null;
+  const box = document.getElementById('rmLookupRes');
+  if (box) { box.classList.add('hidden'); box.innerHTML = ''; }
+  const btn = document.getElementById('rmLookupBtn');
+  if (btn) btn.classList.remove('busy');
+}
+
+async function runRuleLookup(isPoll) {
+  const inp = document.getElementById('rmLookup');
+  const q = (inp && inp.value || '').trim();
+  if (!q) { clearRuleLookup(); return; }
+  const seq = ++_rmLookupSeq;
+  clearTimeout(_rmLookupTimer);
+  const btn = document.getElementById('rmLookupBtn');
+  if (!isPoll && btn) btn.classList.add('busy');
+  const box = document.getElementById('rmLookupRes');
+  if (!isPoll && !_rmLookupLast) {
+    box.classList.remove('hidden');
+    box.innerHTML = '<div class="rml-lk-empty">Проверяю списки…</div>';
+  }
+  let data = null, err = '';
+  try {
+    const res = await fetch(API + '/api/xray/rule-lookup?q=' + encodeURIComponent(q));
+    data = await res.json().catch(() => null);
+    if (!res.ok) err = (data && data.error) || ('HTTP ' + res.status);
+  } catch (e) {
+    err = String(e && e.message || e);
+  }
+  if (seq !== _rmLookupSeq) return;          // пока ждали — ввели другое или закрыли
+  if (btn) btn.classList.remove('busy');
+  box.classList.remove('hidden');
+  if (err || !data) {
+    _rmLookupLast = null;
+    box.innerHTML = _rmLookupCloseBtn() + `<div class="rml-lk-empty">${escHtml(translateError(err) || 'Не удалось проверить')}</div>`;
+    return;
+  }
+  _rmLookupLast = data;
+  _renderRuleLookup(data);
+  const ti = data.tpl_index || {};
+  const modalOpen = !document.getElementById('ruleListManagerModal').classList.contains('hidden');
+  if ((ti.building || (data.pending || []).length) && modalOpen) {
+    _rmLookupTimer = setTimeout(() => { if (seq === _rmLookupSeq) runRuleLookup(true); }, 4000);
+  }
+}
+
+function _rmLookupCloseBtn() {
+  return `<button type="button" class="btn-act rml-lk-close" onclick="document.getElementById('rmLookup').value='';clearRuleLookup()" title="Закрыть" aria-label="Закрыть">&times;</button>`;
+}
+
+function _rmLookupHits(hits, total) {
+  const rows = (hits || []).map(h => {
+    let why = '';
+    if (h.by === 'ip') {
+      why = ` <span class="why">← IP ${escHtml(h.ip || '')}` +
+        (h.no_resolve ? ', no-resolve: сработает, только если приложение идёт сразу на IP' : '') + '</span>';
+    }
+    return escHtml(h.rule) + why;
+  });
+  const more = total > (hits || []).length ? `<br><span class="why">и ещё ${total - hits.length}</span>` : '';
+  return `<div class="rml-lk-rules">${rows.join('<br>')}${more}</div>`;
+}
+
+function _rmLookupPolBadge(pol) {
+  const b = RULE_POLICY_BTNS.find(([v]) => v === pol) || RULE_POLICY_BTNS[2];
+  return `<span class="rml-lk-pol p-${b[0]}" title="${escAttr(b[2])}">${b[1]}</span>`;
+}
+
+function _renderRuleLookup(d) {
+  const box = document.getElementById('rmLookupRes');
+  const target = d.host || ((d.ips || [])[0] || {}).ip || '';
+  let html = _rmLookupCloseBtn() + `<div class="rml-lk-head">${escHtml(target)}</div>`;
+
+  if (d.host) {
+    if (d.dns_error && !(d.ips || []).length) {
+      html += `<div class="rml-lk-note">Не резолвится с сервера (${escHtml(d.dns_error)}) — проверены только доменные правила.</div>`;
+    }
+  }
+  if ((d.ips || []).length) {
+    const shown = d.ips.slice(0, 6).map(i => {
+      const geo = [i.cc ? flagEmoji(i.cc) + ' ' + i.cc : '', i.asn ? 'AS' + i.asn : '', i.org || '']
+        .filter(Boolean).join(' · ');
+      return `<span><code>${escHtml(i.ip)}</code>${geo ? ' ' + escHtml(geo) : ''}</span>`;
+    });
+    if (d.ips.length > 6) shown.push(`<span>и ещё ${d.ips.length - 6}</span>`);
+    html += `<div class="rml-lk-ips">${shown.join('')}</div>`;
+    if (d.host) html += '<div class="rml-lk-note">IP — как их видит сервер. Приложению на телефоне CDN может отдать другие, тогда IP-правила сработают иначе.</div>';
+  }
+
+  // 1) Уже добавленные списки — в порядке приоритета. Первый сработает у клиента,
+  //    у которого этот список выбран (порядок каталога = порядок в конфиге).
+  const lists = d.lists || [];
+  html += '<div class="rml-lk-sec"><div class="rml-lk-sec-title">В добавленных списках</div>';
+  if (lists.length) {
+    html += lists.map((r, i) => {
+      const err = r.error ? `<div class="rml-lk-rules"><span class="why">Файл не скачался: ${escHtml(r.error)}</span></div>` : '';
+      return `<div class="rml-lk-row">
+        <span class="rml-lk-num">${r.prio}</span>
+        <span class="rml-lk-name" onclick="_rmLookupJump('${escAttr(r.id)}')" title="Показать в каталоге">${escHtml(r.name)}</span>
+        ${r.error ? '' : _rmLookupPolBadge(r.policy)}
+        ${i === 0 && !r.error ? '<span class="rml-lk-first">сработает первым у клиентов, где выбран</span>' : ''}
+        ${r.error ? err : _rmLookupHits(r.hits, r.total)}
+      </div>`;
+    }).join('');
+  } else {
+    html += '<div class="rml-lk-empty">Ни в одном списке. У клиента такой трафик идёт по режиму «вне списков» (Direct / VPN / Block).</div>';
+  }
+  const pend = d.pending || [];
+  if (pend.length) {
+    html += `<div class="rml-lk-note">Ещё качаются: ${escHtml(pend.map(p => p.name).join(', '))} — результат дополнится.</div>`;
+  }
+  html += '</div>';
+
+  const glob = d.global || [];
+  if (glob.length) {
+    html += '<div class="rml-lk-sec"><div class="rml-lk-sec-title">В Global rules (сервер XRay)</div>' +
+      glob.map(r => `<div class="rml-lk-row">
+        <span class="rml-lk-num">${r.prio}</span>
+        <span class="rml-lk-name" onclick="switchRmTab('global')" title="Открыть вкладку Global">${escHtml(r.name)}</span>
+        ${r.error ? `<div class="rml-lk-rules"><span class="why">Файл не скачался: ${escHtml(r.error)}</span></div>` : _rmLookupHits(r.hits, r.total)}
+      </div>`).join('') + '</div>';
+  }
+
+  // 2) Шаблоны, которых ещё нет в каталоге: кандидаты на «Добавить».
+  const tpls = d.templates || [];
+  const ti = d.tpl_index || {};
+  html += '<div class="rml-lk-sec"><div class="rml-lk-sec-title">В шаблонах, которые не добавлены</div>';
+  if (tpls.length) {
+    html += tpls.map((t, i) => `<div class="rml-lk-row">
+        <span class="rml-lk-name" onclick="window.open('${escAttr(t.url)}','_blank','noopener')" title="${escAttr(_tplText(t.title) || 'Открыть файл шаблона')}">${escHtml(t.name)}</span>
+        <span class="rule-mgr-card-kind">${t.own ? 'byfox' : 'blackmatrix7'}</span>
+        <button type="button" class="btn btn-sm btn-ghost rml-lk-add" data-tpl="${i}">Добавить</button>
+        ${_rmLookupHits(t.hits, t.total)}
+      </div>`).join('');
+  } else if (ti.ready || !ti.building) {
+    html += '<div class="rml-lk-empty">Ни в одном из шаблонов.</div>';
+  }
+  if (ti.building) {
+    html += `<div class="rml-lk-note">Индекс шаблонов скачивается с api.byfox.dev: ${ti.done || 0} из ${ti.total || 0}. Результат дополнится сам.</div>`;
+  }
+  html += '</div>';
+
+  box.innerHTML = html;
+  box.querySelectorAll('.rml-lk-add[data-tpl]').forEach(b => {
+    b.addEventListener('click', () => _rmLookupAddTpl(tpls[+b.dataset.tpl], b));
+  });
+}
+
+// Подсветить карточку списка в каталоге: сбрасываем фильтр по имени, если он её прячет.
+function _rmLookupJump(id) {
+  const find = () => document.querySelector(`#ruleListBodyLists .rule-mgr-card[data-id="${CSS.escape(id)}"]`);
+  let card = find();
+  if (!card && _rmQuery) {
+    _rmQuery = '';
+    document.getElementById('rmSearch').value = '';
+    renderRuleListManager();
+    card = find();
+  }
+  if (!card) return;
+  card.scrollIntoView({behavior: 'smooth', block: 'center'});
+  card.classList.add('rml-flash');
+  setTimeout(() => card.classList.remove('rml-flash'), 1600);
+}
+
+async function _rmLookupAddTpl(t, btn) {
+  if (!t) return;
+  btn.disabled = true;
+  const res = await fetch(API + '/api/xray/rule-lists', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({platform: 'lists', name: t.name, url: t.url}),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) { btn.disabled = false; toast(translateError(data.error) || 'Ошибка добавления'); return; }
+  toast('Список добавлен: ' + t.name);
+  await loadRuleListCatalogInto();
+  refreshXray();
+  runRuleLookup(true);       // шаблон переедет в «добавленные»
 }
 
 // Адрес для «открыть в новом окне» из ОДНОЙ строки правила. Вручную-списки хранятся
@@ -10997,20 +11556,39 @@ const TPL_SERVICES = [
   "iFlytek","iQIYI","iQIYIIntl","iTalkBB","ifanr","myTVSUPER","zhanqi"
 ];
 
-// Свои шаблоны (byfox): /rules/<name>/{clash/rules.yaml | loon|shadowrocket/rules.list}
+// Каталог шаблонов с api.byfox.dev (/api/xray/rule-templates → items): у каждого
+// шаблона пути файлов под платформу (files), у domain-set — ещё rest, подсказки
+// RU/EN, теги и слова для поиска. URL берём из files, а не собираем из имени:
+// 23 шаблона bm7 вложены (Cloud/AkamaiCloud), у части платформ свой файл.
+// Пока каталога нет (первый старт) — фолбэк: имена из TPL_SERVICES и путь по
+// шаблону bm7, но уже на зеркале api.byfox.dev.
+const RULE_API_BASE = 'https://api.byfox.dev/rule/';
+let _tplBase = RULE_API_BASE;
+let _tplItems = [];            // [{id, src, name, title, desc, tags, category, files, rest, words…}]
+let _tplById = new Map();
+let _tplUrlIdx = null;         // URL файла (lower) → {it, kind}
 let _tplOwn = new Set();
-function _byfoxUrlFor(platform, name) {
-  const p = (platform === 'shadowrocket') ? 'shadowrocket' : (platform === 'loon') ? 'loon' : 'clash';
-  const file = (p === 'clash') ? 'rules.yaml' : 'rules.list';
-  return `https://byfox.dev/data/awg-panel/rules/${encodeURIComponent(name)}/${p}/${file}`;
+
+function _tplPlat(platform) {
+  return (platform === 'shadowrocket' || platform === 'loon') ? platform : 'clash';
 }
-// У blackmatrix7 обычно <Имя>/<Имя>.list. Но самые большие списки разбиты надвое:
-// в <Имя>.list остаются только DOMAIN-KEYWORD/IP-CIDR/URL-REGEX, а все домены —
-// в <Имя>_Domain.list. Брать первый файл = молча получить огрызок: у Advertising
-// это 781 строка и НОЛЬ доменов вместо 257 094.
-// У AdGuardSDNSFilter и EasyPrivacy файла <Имя>.list нет вовсе — только _Domain.
-// Список сверен по всем 667 шаблонам из blackmatrix7.txt (HEAD на оба имени);
-// пересверить при заметном обновлении каталога bm7.
+function _tplUrlIndex() {
+  if (!_tplUrlIdx) {
+    _tplUrlIdx = new Map();
+    _tplItems.forEach(it => ['files', 'rest'].forEach(kind => {
+      Object.values(it[kind] || {}).forEach(rel => _tplUrlIdx.set((_tplBase + rel).toLowerCase(), {it, kind}));
+    }));
+  }
+  return _tplUrlIdx;
+}
+
+function _byfoxUrlFor(platform, name) {
+  const p = _tplPlat(platform);
+  const file = (p === 'clash') ? 'rules.yaml' : 'rules.list';
+  return `${RULE_API_BASE}byfox/${encodeURIComponent(name)}/${p}/${file}`;
+}
+// Фолбэк без каталога. У самых больших списков bm7 домены лежат в <Имя>_Domain,
+// а в <Имя> — только keyword/IP (в каталоге это domain_set + rest).
 const TPL_DOMAIN_SPLIT = new Set([
   'Advertising', 'AdvertisingLite', 'AdvertisingTest', 'AdGuardSDNSFilter',
   'EasyPrivacy', 'Privacy', 'Apple', 'Alibaba', 'Tencent', 'Global',
@@ -11019,16 +11597,22 @@ const TPL_DOMAIN_SPLIT = new Set([
 ]);
 
 function _tplUrlFor(platform, name) {
+  const it = _tplById.get(name);
+  if (it) {
+    const files = it.files || {};
+    const rel = files[_tplPlat(platform)] || files.clash || Object.values(files)[0];
+    if (rel) return _tplBase + rel;
+  }
   if (_tplOwn.has(name)) return _byfoxUrlFor(platform, name);
   let urlPlat, ext;
   if (platform === 'shadowrocket')      { urlPlat = 'Shadowrocket'; ext = '.list'; }
   else if (platform === 'loon')         { urlPlat = 'Loon';         ext = '.list'; }
   else                                  { urlPlat = 'Clash';        ext = '.yaml'; }
   const file = TPL_DOMAIN_SPLIT.has(name) ? `${name}_Domain` : name;
-  return `https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/${urlPlat}/${encodeURIComponent(name)}/${encodeURIComponent(file)}${ext}`;
+  return `${RULE_API_BASE}bm7/${urlPlat}/${encodeURIComponent(name)}/${encodeURIComponent(file)}${ext}`;
 }
 
-// Живая библиотека шаблонов: сервер обновляет её из blackmatrix7.txt раз в 7 дней
+// Живой каталог: сервер сверяет его с api.byfox.dev раз в сутки
 // (/api/xray/rule-templates). TPL_SERVICES — вшитый фолбэк, если кэша ещё нет.
 let _tplServices = TPL_SERVICES;
 let _tplServicesLoaded = false;
@@ -11037,11 +11621,25 @@ async function loadRuleTemplates() {
     const res = await fetch(API + '/api/xray/rule-templates');
     if (res.ok) {
       const data = await res.json();
-      if (Array.isArray(data.services) && data.services.length) _tplServices = data.services;
-      if (Array.isArray(data.own)) _tplOwn = new Set(data.own);
+      if (Array.isArray(data.items) && data.items.length) {
+        _tplBase = data.base || RULE_API_BASE;
+        _tplItems = data.items;
+        _tplById = new Map(_tplItems.map(i => [i.id, i]));
+        _tplUrlIdx = null;
+        _tplServices = _tplItems.filter(i => i.src !== 'byfox').map(i => i.id);
+        _tplOwn = new Set(_tplItems.filter(i => i.src === 'byfox').map(i => i.id));
+      } else {
+        if (Array.isArray(data.services) && data.services.length) _tplServices = data.services;
+        if (Array.isArray(data.own)) _tplOwn = new Set(data.own);
+      }
     }
   } catch (e) { /* фолбэк на вшитый TPL_SERVICES */ }
   _tplServicesLoaded = true;
+}
+
+function _tplText(v) {
+  if (!v || typeof v === 'string') return v || '';
+  return (_i18nEn() ? v.en : v.ru) || v.ru || v.en || '';
 }
 
 let _tplPlatform = null;
@@ -11057,25 +11655,184 @@ async function openTemplatePicker(platform) {
   if (!_tplServicesLoaded) { await loadRuleTemplates(); if (_tplPlatform === platform) _renderTemplates(); }
 }
 
+// Домен или IP в поиске пикера: какие шаблоны его реально содержат — спрашиваем
+// индекс на сервере (/api/xray/rule-templates/find). Ответ кладём в _tplFind и
+// перерисовываем, если запрос за это время не сменился.
+let _tplFind = {q: '', ids: {}, busy: false};
+let _tplFindTimer = null;
+function _tplLooksLikeAddr(q) {
+  return /^[a-z0-9_-]+(\.[a-z0-9_-]+)+\.?$/i.test(q) || /^[0-9a-f:]+$/i.test(q) && q.includes(':') ||
+    /^https?:\/\//i.test(q);
+}
+function _tplFindStart(q) {
+  clearTimeout(_tplFindTimer);
+  if (!_tplLooksLikeAddr(q)) { _tplFind = {q: '', ids: {}, busy: false}; return; }
+  if (_tplFind.q === q) return;
+  _tplFind = {q, ids: {}, busy: true};
+  _tplFindTimer = setTimeout(async () => {
+    let ids = {};
+    try {
+      const res = await fetch(API + '/api/xray/rule-templates/find?q=' + encodeURIComponent(q));
+      if (res.ok) ids = (await res.json()).ids || {};
+    } catch (e) { /* без индекса — обычный поиск по именам */ }
+    if (_tplFind.q !== q) return;
+    _tplFind = {q, ids, busy: false};
+    _renderTemplates();
+  }, 250);
+}
+
+// Насколько шаблон подходит под запрос: 0 — нет. Совпадение по содержимому
+// (домен/IP из индекса) и имя важнее подсказки, подсказка важнее слов и
+// примеров доменов. Сборники bm7 для КНР — в конец.
+function _tplScore(name, it, q) {
+  const n = name.toLowerCase();
+  let sc = 0;
+  if (!q) sc = 1;
+  else if (_tplFind.q === q && _tplFind.ids[name]) sc = 80;
+  else if (n === q) sc = 100;
+  else if (n.startsWith(q)) sc = 60;
+  else if (n.includes(q)) sc = 40;
+  else if (it) {
+    // Подсказка и описание — на обоих языках: «реклама» найдёт и в EN-интерфейсе.
+    const both = v => (v && typeof v === 'object') ? (v.ru || '') + ' ' + (v.en || '') : (v || '');
+    const t = (both(it.title) + ' ' + both(it.desc)).toLowerCase();
+    const w = ' ' + String(it.words || '') + ' ' + (it.tags || []).join(' ').toLowerCase() + ' ';
+    if (w.includes(' ' + q + ' ')) sc = 30;
+    else if (t.includes(q)) sc = 20;
+    else if (w.includes(q)) sc = 15;
+    else if ((it.sample || []).some(d => d.includes(q))) sc = 10;
+  }
+  if (sc && it && it.category === 'china-bundle') sc -= 0.5;
+  return sc;
+}
+
+const TPL_INFO_ICON = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<circle cx="12" cy="12" r="9.5"/><path d="M9.6 9.3a2.5 2.5 0 0 1 4.85.85c0 1.65-2.45 2.3-2.45 3.6"/><circle cx="12" cy="17" r=".6" fill="currentColor"/></svg>';
+
 function _renderTemplates() {
   const platform = _tplPlatform;
   const q = document.getElementById('tplSearch').value.trim().toLowerCase();
+  _tplFindStart(q);
   const list = document.getElementById('tplList');
   const existingUrls = new Set();
   const cat = (typeof _ruleListCatalog === 'object' && _ruleListCatalog) ? (_ruleListCatalog[platform] || []) : [];
-  cat.forEach(r => { if (r && r.url) existingUrls.add(String(r.url).trim().toLowerCase()); });
-  const all = [...new Set([..._tplOwn, ..._tplServices])].sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
-  const available = all.filter(s => !existingUrls.has(_tplUrlFor(platform, s).toLowerCase()));
-  const filtered = q ? available.filter(s => s.toLowerCase().includes(q)) : available;
-  if (!filtered.length) {
-    const msg = available.length === 0 ? 'Все шаблоны уже добавлены.' : 'Ничего не найдено.';
+  cat.forEach(r => { if (r && r.url) existingUrls.add(_ruleUrlForPlatform(String(r.url).trim(), 'clash').toLowerCase()); });
+  const all = [...new Set([..._tplOwn, ..._tplServices])];
+  const available = all.filter(s => !existingUrls.has(_tplUrlFor('clash', s).toLowerCase()));
+  const scored = available.map(s => [s, _tplScore(s, _tplById.get(s), q)]).filter(x => x[1] > 0);
+  scored.sort((a, b) => (b[1] - a[1]) || a[0].toLowerCase().localeCompare(b[0].toLowerCase()));
+  if (!scored.length) {
+    const msg = available.length === 0 ? 'Все шаблоны уже добавлены.'
+      : (_tplFind.q === q && _tplFind.busy) ? 'Ищу в шаблонах…' : 'Ничего не найдено.';
     list.innerHTML = `<div style="color:var(--text3);font-size:13px;padding:12px;grid-column:1/-1;text-align:center;">${msg}</div>`;
+    const cnt0 = document.getElementById('tplCount');
+    if (cnt0) cnt0.textContent = '';
     return;
   }
-  list.innerHTML = filtered.map(s => {
-    const safe = s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-    return `<button type="button" class="btn btn-sm btn-ghost tpl-cell" onclick="_pickTemplate('${s.replace(/'/g, "\\'")}')" title="${safe}">${safe}</button>`;
+  const en = _i18nEn();
+  list.innerHTML = scored.map(([s], i) => {
+    const it = _tplById.get(s);
+    const title = it ? _tplText(it.title) : '';
+    const desc = it ? _tplText(it.desc) : '';
+    const hit = _tplFind.q === q ? _tplFind.ids[s] : '';
+    // Карточка: имя + группа, ниже краткое описание (2 строки), «?» — полное.
+    const sub = desc || (title && title.toLowerCase() !== s.toLowerCase() ? title : '');
+    const c = it ? TPL_CATEGORIES[it.category] : null;
+    const tip = it ? [title || s, desc].filter(Boolean).join('\n') : s;
+    return '<div class="tpl-item">' +
+      `<button type="button" class="tpl-cell" data-tpl="${i}" title="${escAttr(tip)}">` +
+      '<span class="tpl-top">' +
+      `<span class="tpl-name">${escHtml(s)}</span>` +
+      (c ? `<span class="tpl-cat">${escHtml(en ? c[1] : c[0])}</span>` : '') + '</span>' +
+      (hit ? `<span class="tpl-hit">${escHtml(hit)}</span>` : '') +
+      (sub ? `<span class="tpl-sub">${escHtml(sub)}</span>` : '') + '</button>' +
+      (it ? `<button type="button" class="tpl-info" data-info="${i}" title="Описание шаблона" aria-label="Описание шаблона">${TPL_INFO_ICON}</button>` : '') +
+      '</div>';
   }).join('');
+  const cnt = document.getElementById('tplCount');
+  if (cnt) cnt.textContent = `Шаблонов: ${scored.length}`;
+  list.querySelectorAll('.tpl-cell[data-tpl]').forEach(b => {
+    b.addEventListener('click', () => _pickTemplate(scored[+b.dataset.tpl][0]));
+  });
+  list.querySelectorAll('.tpl-info[data-info]').forEach(b => {
+    b.addEventListener('click', e => { e.stopPropagation(); openTplInfo(scored[+b.dataset.info][0]); });
+  });
+}
+
+// Категории каталога api.byfox.dev → подпись в окне описания.
+const TPL_CATEGORIES = {
+  ai: ['Нейросети', 'AI'], apple: ['Apple', 'Apple'], google: ['Google', 'Google'],
+  microsoft: ['Microsoft', 'Microsoft'], social: ['Соцсети', 'Social networks'],
+  messenger: ['Мессенджеры', 'Messengers'], video: ['Видео', 'Video'], music: ['Музыка', 'Music'],
+  news: ['Новости', 'News'], games: ['Игры', 'Games'], dev: ['Разработка', 'Development'],
+  cloud: ['Облака', 'Cloud'], cdn: ['CDN', 'CDN'], ads: ['Реклама и трекеры', 'Ads and trackers'],
+  privacy: ['Приватность', 'Privacy'], finance: ['Финансы', 'Finance'], crypto: ['Криптовалюты', 'Crypto'],
+  shopping: ['Покупки', 'Shopping'], tools: ['Сервисы и утилиты', 'Tools'], devices: ['Устройства', 'Devices'],
+  education: ['Обучение', 'Education'], torrent: ['Торренты', 'Torrents'], cert: ['Сертификаты', 'Certificates'],
+  system: ['Системные', 'System'], russia: ['Россия', 'Russia'], china: ['Китай', 'China'],
+  'china-bundle': ['Сборник для Китая', 'China bundle'], other: ['Прочее', 'Other'],
+};
+
+function _tplDate(iso) {
+  const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[3]}.${m[2]}.${m[1]}` : '';
+}
+
+// Окно «?» у шаблона: что это, что внутри, примеры доменов, где проверить.
+function openTplInfo(name) {
+  const it = _tplById.get(name);
+  if (!it) return;
+  const en = _i18nEn();
+  const num = n => Number(n || 0).toLocaleString(en ? 'en-US' : 'ru-RU');
+  const st = it.stats || {};
+  const cat = TPL_CATEGORIES[it.category] || null;
+  document.getElementById('tplInfoTitle').textContent = _tplText(it.title) || name;
+
+  let html = '<div class="tpl-info-body">';
+  html += '<div class="tpl-info-head">' +
+    `<code>${escHtml(name)}</code>` +
+    `<span>${it.src === 'byfox' ? 'byFox' : 'blackmatrix7'}</span>` +
+    (cat ? `<span>${escHtml(en ? cat[1] : cat[0])}</span>` : '') + '</div>';
+  const desc = _tplText(it.desc);
+  if (desc) html += `<div class="tpl-info-desc">${escHtml(desc)}</div>`;
+
+  const chips = [
+    [(st.domains || 0) + (st.suffixes || 0), 'Домены'],
+    [st.keywords, 'Ключевые слова'],
+    [(st.cidr || 0) + (st.cidr6 || 0), 'IP-подсети'],
+    [st.asn, 'Сети ASN'],
+    [st.other, 'Другие правила'],
+  ].filter(([n]) => n > 0);
+  if (chips.length) {
+    html += '<div class="tpl-info-sec"><div class="tpl-info-sec-t">Что внутри</div><div class="tpl-chips">' +
+      chips.map(([n, label]) => `<span class="tpl-chip">${label} <b>${num(n)}</b></span>`).join('') + '</div></div>';
+  }
+  if ((it.sample || []).length) {
+    html += '<div class="tpl-info-sec"><div class="tpl-info-sec-t">Примеры доменов</div><div class="tpl-chips">' +
+      it.sample.map(d => `<code class="tpl-chip">${escHtml(d)}</code>`).join('') + '</div></div>';
+  }
+  if (it.check) {
+    html += `<div class="tpl-info-sec"><div class="tpl-info-sec-t">Проверить, работает ли</div>` +
+      `<a href="${escAttr(it.check)}" target="_blank" rel="noopener">${escHtml(it.check)}</a></div>`;
+  }
+  const files = it.files || {};
+  const rel = files.clash || Object.values(files)[0];
+  if (rel) {
+    html += `<div class="tpl-info-sec"><div class="tpl-info-sec-t">Файл правил</div>` +
+      `<a href="${escAttr(_tplBase + rel)}" target="_blank" rel="noopener">${escHtml(_tplBase + rel)}</a></div>`;
+  }
+  const notes = [];
+  if (it.domain_set) notes.push('Большой список: домены лежат одним файлом, ключевые слова и IP — другим. Панель подключает оба сама.');
+  if (it.category === 'china-bundle') notes.push('Сборник blackmatrix7 для пользователей из Китая. Для обхода блокировок в России обычно не нужен — лучше взять шаблоны нужных сервисов.');
+  const upd = _tplDate(it.updated);
+  if (upd) notes.push(`Обновлён в источнике: ${upd}.`);
+  if (notes.length) html += notes.map(n => `<div class="tpl-info-note">${escHtml(n)}</div>`).join('');
+  html += '</div>';
+  document.getElementById('tplInfoBody').innerHTML = html;
+
+  const add = document.getElementById('tplInfoAdd');
+  add.onclick = () => { closeModal('tplInfoModal'); _pickTemplate(name); };
+  document.getElementById('tplInfoModal').classList.remove('hidden');
 }
 
 function _pickTemplate(name) {

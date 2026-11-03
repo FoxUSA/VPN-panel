@@ -61,6 +61,7 @@ _country_ruleset_url = None
 _lists_final_policy = None
 _normalize_inline_rule_line = None
 _rule_url_for_platform = None
+_tpl_rest_url = None
 load_rule_lists = None
 SERVER_CFG = {}
 XRAY_PARAMS = {}
@@ -99,6 +100,7 @@ REQUIRED_DEPS = [
     '_panel_port_reserved',
     '_parse_friendly_path',
     '_rule_url_for_platform',
+    '_tpl_rest_url',
     '_save_server_config',
     '_strip_token_ext',
     '_validate_safe_name',
@@ -549,6 +551,11 @@ def _client_selected_for(platform, client):
         if e.get('url'):
             e['url'] = _rule_url_for_platform(e['url'], platform)
         out.append(e)
+        # У domain-set шаблона (bm7 <Имя>_Domain) ключевые слова, IP и ASN лежат
+        # отдельным classical-файлом — подключаем его следом, с той же политикой.
+        rest = _tpl_rest_url(e['url']) if e.get('url') else ''
+        if rest:
+            out.append(dict(e, id=f"{e['id']}_rest", url=rest))
     return out
 
 

@@ -44,7 +44,12 @@ app = Flask(__name__, static_folder='static')
 # manifest.json остаётся доступен и отдельным файлом на CDN для дешёвой проверки.
 UPDATE_BASE_URL = 'https://byfox.dev/data/awg-panel/'
 UPDATE_ZIP_URL = UPDATE_BASE_URL.rstrip('/') + '/awg-panel.zip'
-GEO_BASE_URL = 'https://byfox.dev/data/maxmind/'
+# Гео-базы и шаблоны правил — с api.byfox.dev: там их собирают раз в сутки
+# (MaxMind, зеркало blackmatrix7, свои шаблоны, индекс поиска). Код панели
+# по-прежнему качается с byfox.dev (UPDATE_BASE_URL).
+API_BASE_URL = 'https://api.byfox.dev/'
+GEO_BASE_URL = API_BASE_URL + 'geo/'
+RULE_BASE_URL = API_BASE_URL + 'rule/'
 GEO_FILES = {
     # local-filename: remote-filename — keep local names as panel was built around them
     'GeoLite2-City.mmdb': 'GeoLite2-City.mmdb',
@@ -224,8 +229,8 @@ DEFAULT_SERVER_CONFIG = {
     'geo_check_interval_days': 180,
     'geo_auto_update': True,
     'geo_last_check': 0,
-    'bm7_version': '',                 # дата DD.MM.YYYY установленных шаблонов blackmatrix7
-    'bm7_check_interval_days': 7,
+    'bm7_version': '',                 # дата DD.MM.YYYY каталога шаблонов (api.byfox.dev)
+    'bm7_check_interval_days': 1,
     'bm7_auto_update': True,
     'bm7_last_check': 0,
     # DNS по умолчанию для НОВЫХ XRay-клиентов (и «дефолт» в модалке Global).
@@ -324,6 +329,13 @@ def _load_server_config():
                 cfg['geo_version'] = str(mani.get('geo_version')); migrated = True
             if not cfg.get('bm7_version') and mani.get('blackmatrix7_version'):
                 cfg['bm7_version'] = str(mani.get('blackmatrix7_version')); migrated = True
+            # Шаблоны переехали на api.byfox.dev: там каталог собирается раз в сутки,
+            # а проверка — это манифест в пару КБ. Старый дефолт 7 дней → 1 (разово;
+            # выставленное руками другое число не трогаем).
+            if not cfg.get('bm7_api_migrated'):
+                if int(cfg.get('bm7_check_interval_days') or 7) == 7:
+                    cfg['bm7_check_interval_days'] = 1
+                cfg['bm7_api_migrated'] = 1; migrated = True
             # Вложенные словари setdefault не добирает — дописываем новые ключи внутрь.
             for k, v in DEFAULT_SERVER_CONFIG.items():
                 if isinstance(v, dict) and isinstance(cfg.get(k), dict):
@@ -956,7 +968,7 @@ def geo_asn_full(ip):
 _IPV4_RE = re.compile(r'^\d{1,3}(?:\.\d{1,3}){3}$')
 
 # === Country IP-range rule-sets (для клиентских правил Loon/Clash/Shadowrocket) ===
-# Источник — готовый byfox.dev/data/maxmind/countries.zip (формат строк start-end,
+# Источник — готовый api.byfox.dev/geo/countries.zip (формат строк start-end,
 # по файлу на страну). Качаем по тому же 180-дневному циклу, что и геобазы, кладём
 # в справочник по ISO-коду, а при отдаче конвертим start-end → CIDR (с диск-кешем).
 # На сервер (XRay) это НЕ идёт — там whitelist/blacklist по geoip:cc в глобал-руле.
@@ -1153,8 +1165,8 @@ XRAY_LOG_FULL_BYTES = 50 * 1024 * 1024  # 50 MB (covers half a 100 MB file)
 XRAY_LAST_IPS_FILE = os.path.join(DATA_XRAY_DIR, 'last_ips.json')
 
 # Shadowrocket / Surge rule lists
-XRAY_GEOIP_MMDB_URL = 'https://byfox.dev/data/maxmind/GeoLite2-Country.mmdb'
-XRAY_GEOIP_ASN_MMDB_URL = 'https://byfox.dev/data/maxmind/GeoLite2-ASN.mmdb'
+XRAY_GEOIP_MMDB_URL = GEO_BASE_URL + 'GeoLite2-Country.mmdb'
+XRAY_GEOIP_ASN_MMDB_URL = GEO_BASE_URL + 'GeoLite2-ASN.mmdb'
 XRAY_RULE_UPDATE_INTERVAL = 86400  # 24h, applied to RULE-SET and config update-interval
 
 # Режим исключений («что делать с трафиком вне списков») в geo_mode='lists'.
@@ -2954,22 +2966,27 @@ CLIENT_RULE_PLATFORMS = ('lists',)
 # === blackmatrix7 шаблоны — авто-обновление БИБЛИОТЕКИ шаблонов ===
 # ВАЖНО: это обновляет только список ШАБЛОНОВ (кнопка «Шаблоны» в редакторе
 # списков правил) — НЕ трогает xray_rule_lists.json (там только то, что юзер сам
-# добавил/выбрал). Шаблоны — имена-папки blackmatrix7; фронт тянет их с
-# /api/xray/rule-templates и строит URL сам (_tplUrlFor, генерация постоянна).
-# Источник — byfox.dev/data/maxmind/blackmatrix7.txt: 1-я строка <!--DD.MM.YYYY-->,
-# дальше по имени-папке на строку. Раз в N дней (server.json bm7_check_interval_days,
-# дефолт 7) тихо проверяем дату; свежее локальной (server.json bm7_version) —
-# перезаписываем кэш шаблонов. Период/свитч/last_check ведёт _auto_update_loop.
-BM7_SERVICES_URL = GEO_BASE_URL.rstrip('/') + '/blackmatrix7.txt'
-BM7_TEMPLATES_FILE = os.path.join(DATA_GEO_DIR, 'blackmatrix7_templates.json')  # {date, services[]}
+# добавил/выбрал). Источник — каталог api.byfox.dev/rule/templates.json(.gz):
+# все шаблоны blackmatrix7 и свои, с подсказками и путями файлов под каждую
+# платформу (зеркало bm7 там же, rule/bm7/…). Раз в N дней (server.json
+# bm7_check_interval_days, дефолт 1) сверяем rule/manifest.json; сменился sha
+# каталога — перезаписываем кэш (дата в server.json bm7_version, DD.MM.YYYY).
+# Период/свитч/last_check ведёт _auto_update_loop.
+BM7_TEMPLATES_FILE = os.path.join(DATA_GEO_DIR, 'blackmatrix7_templates.json')  # {date, sha, base, items[]}
 
-# === Свои шаблоны правил (byfox.dev/data/awg-panel/rules) ===
-# Структура на CDN: /rules/folders.txt (перечень папок-шаблонов) и
-# /rules/<name>/{clash/rules.yaml, loon/rules.list, shadowrocket/rules.list}.
-# Показываются в пикере «Шаблоны» вместе с blackmatrix7; период обновления общий
-# с blackmatrix7 (_byfox_rules_sync_once дёргается из _bm7_sync_once).
-BYFOX_RULES_BASE = UPDATE_BASE_URL.rstrip('/') + '/rules'
-BYFOX_RULES_FILE = os.path.join(DATA_GEO_DIR, 'byfox_rules.json')  # {folders[], quic{plat:[lines]}, fetched}
+# === Свои шаблоны правил (api.byfox.dev/rule/byfox/<имя>/…) ===
+# /rule/byfox/<name>/{clash/rules.yaml, loon/rules.list, shadowrocket/rules.list}.
+# Приезжают в том же каталоге templates.json (src='byfox'). BYFOX_RULES_FILE —
+# кэш старой схемы (folders.txt с byfox.dev), читается только как фолбэк.
+BYFOX_RULES_BASE = RULE_BASE_URL + 'byfox'
+BYFOX_RULES_FILE = os.path.join(DATA_GEO_DIR, 'byfox_rules.json')  # {folders[], fetched}
+# Копии файлов списков каталога для «Домен или IP» в «Списках правил». В бэкап
+# не идёт (BACKUP_TAR_EXCLUDES) — перекачивается сам.
+RULE_TPL_CACHE_DIR = os.path.join(DATA_GEO_DIR, 'tpl_cache')
+# Готовый индекс поиска по всем шаблонам с api.byfox.dev (rule/index/, ~6 МБ
+# шардами): какие шаблоны покрывают домен или IP. Сверяется по sha из
+# rule/manifest.json, подменяется целиком. В бэкап не идёт.
+RULE_INDEX_DIR = os.path.join(DATA_GEO_DIR, 'tpl_index')
 # Особый шаблон: QUIC-fix. Его правила (AND,((PROTOCOL,UDP),(DEST-PORT,443),...),REJECT)
 # нельзя отдать как RULE-SET (в них своя политика) — панель вставляет их ИНЛАЙНОМ
 # в самое начало секции правил каждого выбравшего клиента. Кэшируются локально.
@@ -6076,12 +6093,12 @@ def _discover_paths_detailed():
         not_installed=xray_ni, group=G_DATA))
     items.append(item(
         'blackmatrix7_templates', 'data/geo_rules/blackmatrix7_templates.json',
-        'Кэш библиотеки шаблонов blackmatrix7 (имена-папки для кнопки «Шаблоны»). Раз в 7 дней тянется с byfox.dev и тихо перезаписывается. На списки правил пользователя не влияет — дата в server.json (bm7_version).',
+        'Кэш каталога шаблонов (blackmatrix7 и свои: имена, подсказки, пути файлов для кнопки «Шаблоны»). Раз в сутки сверяется с api.byfox.dev/rule/manifest.json и тихо перезаписывается. На списки правил пользователя не влияет — дата в server.json (bm7_version).',
         BM7_TEMPLATES_FILE if xray.get('installed') else '', '/opt/awg-panel/data/geo_rules/blackmatrix7_templates.json', 'DATA_GEO_DIR + /blackmatrix7_templates.json',
         not_installed=xray_ni, group=G_DATA))
     items.append(item(
         'byfox_rules', 'data/geo_rules/byfox_rules.json',
-        'Кэш своих шаблонов правил с byfox.dev (перечень папок для кнопки «Шаблоны» + инлайн QUIC-fix правила block_ads_trackers_quic). Обновляется в один период с blackmatrix7.',
+        'Старый кэш своих шаблонов (перечень папок с byfox.dev). Сейчас свои шаблоны приезжают в каталоге с api.byfox.dev, файл читается только как запасной.',
         BYFOX_RULES_FILE if xray.get('installed') else '', '/opt/awg-panel/data/geo_rules/byfox_rules.json', 'DATA_GEO_DIR + /byfox_rules.json',
         not_installed=xray_ni, group=G_DATA))
     items.append(item(
@@ -6208,6 +6225,14 @@ def _discover_paths_detailed():
         'geo_asn_db', 'data/geo_rules/GeoLite2-ASN.mmdb',
         'База IP → провайдер (ASN). Используется в логах рядом со страной.',
         ASN_DB, '/opt/awg-panel/data/geo_rules/GeoLite2-ASN.mmdb', 'константа ASN_DB', group=G_GEO))
+    items.append(item(
+        'rule_tpl_cache', 'data/geo_rules/tpl_cache/',
+        'Копии файлов списков каталога для поиска «Домен или IP». Качаются при поиске, в бэкап не идут.',
+        RULE_TPL_CACHE_DIR, '/opt/awg-panel/data/geo_rules/tpl_cache', 'константа RULE_TPL_CACHE_DIR', is_dir=True, group=G_GEO))
+    items.append(item(
+        'rule_tpl_index', 'data/geo_rules/tpl_index/',
+        'Индекс поиска по всем шаблонам (какие шаблоны покрывают домен или IP) — готовый с api.byfox.dev/rule/index/. Сверяется раз в сутки, в бэкап не идёт.',
+        RULE_INDEX_DIR, '/opt/awg-panel/data/geo_rules/tpl_index', 'константа RULE_INDEX_DIR', is_dir=True, group=G_GEO))
     items.append(item(
         'panel_manifest_geo', 'server.json → geo_version',
         'Метка версии установленных geo-баз (дата YYYYMMDD в поле geo_version в server.json). Сравнивается с remote-версией на CDN byfox.dev для решения «обновлять ли» (период geo_check_interval_days, дефолт 180).',
@@ -10349,16 +10374,20 @@ rules_mod.init({
     '_xray_unique_email': _xray_unique_email,
     'audit': audit,
     'find_xray_inbound_idx': find_xray_inbound_idx,
+    'geo_asn_full': geo_asn_full,
     'load_xray_clients': load_xray_clients,
     'load_xray_config': load_xray_config,
     'save_xray_clients': save_xray_clients,
     'save_xray_config': save_xray_config,
     'schedule_xray_restart': schedule_xray_restart,
     'login_required': login_required,
-    'BM7_SERVICES_URL': BM7_SERVICES_URL,
+    'RULE_BASE_URL': RULE_BASE_URL,
+    'PANEL_VERSION': PANEL_VERSION,
     'BM7_TEMPLATES_FILE': BM7_TEMPLATES_FILE,
     'BYFOX_RULES_BASE': BYFOX_RULES_BASE,
     'BYFOX_RULES_FILE': BYFOX_RULES_FILE,
+    'RULE_TPL_CACHE_DIR': RULE_TPL_CACHE_DIR,
+    'RULE_INDEX_DIR': RULE_INDEX_DIR,
     'CLIENT_RULE_PLATFORMS': CLIENT_RULE_PLATFORMS,
     'COUNTRIES_CACHE_DIR': COUNTRIES_CACHE_DIR,
     'COUNTRIES_SRC_DIR': COUNTRIES_SRC_DIR,
@@ -10381,7 +10410,6 @@ _bm7_date_tuple = rules_mod._bm7_date_tuple
 _bm7_local_version = rules_mod._bm7_local_version
 _bm7_sync_once = rules_mod._bm7_sync_once
 _build_global_rules = rules_mod._build_global_rules
-_byfox_rules_sync_once = rules_mod._byfox_rules_sync_once
 _client_rule_policy_overrides = rules_mod._client_rule_policy_overrides
 _countries_download_and_store = rules_mod._countries_download_and_store
 _country_ruleset_available = rules_mod._country_ruleset_available
@@ -11447,6 +11475,7 @@ profiles_mod.init({
     '_lists_final_policy': _lists_final_policy,
     '_normalize_inline_rule_line': _normalize_inline_rule_line,
     '_rule_url_for_platform': _rule_url_for_platform,
+    '_tpl_rest_url': rules_mod._tpl_rest_url,
     'load_rule_lists': load_rule_lists,
     'PANEL_NGINX_LINK': PANEL_NGINX_LINK,
     'PANEL_NGINX_SITE': PANEL_NGINX_SITE,
@@ -11851,7 +11880,6 @@ try:
         '_bm7_local_version': _bm7_local_version,
         '_bm7_date_tuple': _bm7_date_tuple,
         '_fetch_remote_bm7_date': _fetch_remote_bm7_date,
-        '_byfox_rules_sync_once': _byfox_rules_sync_once,
         '_fetch_remote_geo_version': _fetch_remote_geo_version,
         '_read_local_geo_version': _read_local_geo_version,
         '_geo_newer': _geo_newer,
@@ -11965,7 +11993,7 @@ else:
 try:
     from modules import sys_health
 
-    sys_health.init({'login_required': login_required})
+    sys_health.init({'login_required': login_required, 'data_dir': DATA_DIR})
     app.register_blueprint(sys_health.bp)
 except Exception as _sh_err:
     # Панель поднимается и без модуля — пропадает только вкладка «Здоровье сервера».

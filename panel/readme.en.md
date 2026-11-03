@@ -29,7 +29,10 @@ Full package archive: <https://byfox.dev/data/awg-panel/awg-panel.zip>
 The panel checks its own version and updates its code from `manifest.json` at <https://byfox.dev/data/awg-panel> (button in the footer). Updates replace code only: everything user-owned lives in `data/` and is never touched.
 
 ## Geo
-MaxMind GeoLite2 databases (City/ASN) are downloaded from <https://byfox.dev/data/maxmind>. The local database version is stored in `server.json` (`geo_version` field) and compared against the CDN date roughly every 180 days — if outdated, the panel offers to update.
+MaxMind GeoLite2 databases (City/ASN) are downloaded from <https://api.byfox.dev/geo/>. The local database version is stored in `server.json` (`geo_version` field) and compared against the server date roughly every 180 days — if outdated, the panel offers to update.
+
+## Rule templates
+The template catalog (a blackmatrix7 mirror plus byFox's own templates, with hints) and the “Domain or IP” search index come from <https://api.byfox.dev/rule/>: once a day the panel checks `rule/manifest.json` and downloads only what changed. Client profiles also point to rule files there, not to GitHub. The sources of our own templates live in the api.byfox.dev project, not in the panel.
 
 ## Languages (i18n)
 Translation runs on the client: Russian is the source, the engine translates the visible DOM text into EN.

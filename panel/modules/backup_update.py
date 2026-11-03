@@ -42,7 +42,6 @@ _bm7_sync_once = None
 _bm7_local_version = None
 _bm7_date_tuple = None
 _fetch_remote_bm7_date = None
-_byfox_rules_sync_once = None
 _fetch_remote_geo_version = None
 _read_local_geo_version = None
 _geo_newer = None
@@ -79,7 +78,6 @@ REQUIRED_DEPS = [
     '_bm7_local_version',
     '_bm7_date_tuple',
     '_fetch_remote_bm7_date',
-    '_byfox_rules_sync_once',
     '_fetch_remote_geo_version',
     '_read_local_geo_version',
     '_geo_newer',
@@ -208,7 +206,7 @@ def update_check():
     bm7 = {
         'local': local_bm7, 'remote': remote_bm7, 'update_available': bm7_avail,
         'last_check': int(SERVER_CFG.get('bm7_last_check') or 0),
-        'interval_days': _i('bm7_check_interval_days', 7),
+        'interval_days': _i('bm7_check_interval_days', 1),
         'auto': bool(SERVER_CFG.get('bm7_auto_update', True)),
     }
     return jsonify({
@@ -462,13 +460,12 @@ def update_apply_all():
     try:
         now = int(time.time())
         done, need_restart = [], False
-        # 1) blackmatrix7 (без рестарта) + свои шаблоны (byfox)
+        # 1) шаблоны blackmatrix7 и свои (без рестарта). Сверка — по sha каталога в
+        # rule/manifest.json: дата за день не меняется, а содержимое может.
         try:
-            remote_bm7 = _fetch_remote_bm7_date()
-            if remote_bm7 and _bm7_date_tuple(remote_bm7) > _bm7_date_tuple(_bm7_local_version()):
-                _bm7_sync_once(); done.append('шаблоны blackmatrix7')
-            else:
-                _byfox_rules_sync_once()   # bm7 не свежее — свои шаблоны всё равно тянем
+            s = _bm7_sync_once()
+            if isinstance(s, dict) and s.get('changed'):
+                done.append('шаблоны правил')
         except Exception as e:
             audit('warn', f'apply-all bm7: {e}')
         SERVER_CFG['bm7_last_check'] = now
@@ -576,7 +573,7 @@ def _auto_update_loop():
                 _auto_check_panel(now)
             if SERVER_CFG.get('geo_auto_update', True) and _auto_due('geo_last_check', 'geo_check_interval_days', 180, now):
                 _auto_check_geo(now)
-            if SERVER_CFG.get('bm7_auto_update', True) and _auto_due('bm7_last_check', 'bm7_check_interval_days', 7, now):
+            if SERVER_CFG.get('bm7_auto_update', True) and _auto_due('bm7_last_check', 'bm7_check_interval_days', 1, now):
                 _auto_check_bm7(now)
         except Exception as e:
             try: audit('warn', f'Авто-обновление: ошибка цикла: {e}')
@@ -598,6 +595,8 @@ BACKUP_TAR_EXCLUDES = [
     'data/geo_rules/countries',      # то же после переезда гео (фаза 5)
     'data/geo_rules/countries_src',
     '*.mmdb',                   # базы MaxMind (десятки МБ) — качаются заново
+    'data/geo_rules/tpl_cache', # копии списков для «Домен или IP» — качаются заново
+    'data/geo_rules/tpl_index', # индекс шаблонов с api.byfox.dev — качается заново
 ]
 
 def _backup_external_files():
