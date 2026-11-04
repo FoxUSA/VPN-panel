@@ -11617,11 +11617,13 @@ function _tplUrlFor(platform, name) {
 let _tplServices = TPL_SERVICES;
 let _tplServicesLoaded = false;
 async function loadRuleTemplates() {
+  let full = false;
   try {
     const res = await fetch(API + '/api/xray/rule-templates');
     if (res.ok) {
       const data = await res.json();
-      if (Array.isArray(data.items) && data.items.length) {
+      full = Array.isArray(data.items) && data.items.length > 0;
+      if (full) {
         _tplBase = data.base || RULE_API_BASE;
         _tplItems = data.items;
         _tplById = new Map(_tplItems.map(i => [i.id, i]));
@@ -11634,7 +11636,9 @@ async function loadRuleTemplates() {
       }
     }
   } catch (e) { /* фолбэк на вшитый TPL_SERVICES */ }
-  _tplServicesLoaded = true;
+  // Без каталога (сервер его ещё качает) — не запоминаем: переспросим.
+  _tplServicesLoaded = full;
+  return full;
 }
 
 function _tplText(v) {
@@ -11652,7 +11656,18 @@ async function openTemplatePicker(platform) {
   _renderTemplates();
   document.getElementById('templatePickerModal').classList.remove('hidden');
   setTimeout(() => { const s = document.getElementById('tplSearch'); if (s) s.focus(); }, 50);
-  if (!_tplServicesLoaded) { await loadRuleTemplates(); if (_tplPlatform === platform) _renderTemplates(); }
+  if (_tplServicesLoaded) return;
+  // Каталог с описаниями сервер может ещё качать с api.byfox.dev — пока окно
+  // открыто, переспрашиваем, и карточки дорисуются сами.
+  const modal = document.getElementById('templatePickerModal');
+  for (let i = 0; i < 15; i++) {
+    const full = await loadRuleTemplates();
+    if (_tplPlatform !== platform || modal.classList.contains('hidden')) return;
+    _renderTemplates();
+    if (full) return;
+    await new Promise(r => setTimeout(r, 4000));
+    if (modal.classList.contains('hidden')) return;
+  }
 }
 
 // Домен или IP в поиске пикера: какие шаблоны его реально содержат — спрашиваем

@@ -1352,7 +1352,11 @@ def xray_rule_templates_get():
             pass
         items = [dict(i, words=' '.join(words.get(i['id'], ()))) for i in items]
         return jsonify({'date': t.get('date') or '', 'base': _tpl_base(), 'items': items})
-    return jsonify({'date': t.get('date') or '', 'services': t.get('services') or [], 'own': _byfox_own_folders()})
+    # Каталога ещё нет (первый старт, api.byfox.dev не ответил) — качаем фоном,
+    # а пока отдаём имена; фронт переспросит, пока loading.
+    _tpl_index_kick()
+    return jsonify({'date': t.get('date') or '', 'services': t.get('services') or [],
+                    'own': _byfox_own_folders(), 'loading': True})
 
 
 # === Где домен: поиск по содержимому списков ================================
@@ -1685,13 +1689,16 @@ def _tpl_index_kick(delay=0, manifest=None):
             _tpl_index_state['running'] = True
         try:
             man = manifest
+            # Каталога нет — качаем, даже если индекс свежий: без него пикер
+            # показывает голые имена без описаний и «?».
+            need_cat = not _tpl_items()
             if man is None:
                 meta = _tpl_meta()
-                if meta and time.time() - (meta.get('checked') or meta.get('built') or 0) < _TPL_INDEX_MAX_AGE:
+                if not need_cat and meta and time.time() - (meta.get('checked') or meta.get('built') or 0) < _TPL_INDEX_MAX_AGE:
                     return
                 man = _rule_manifest()
-            if not _tpl_items():
-                _bm7_sync_core(man)    # каталог нужен поиску так же, как индекс
+            if need_cat:
+                _bm7_sync_core(man)    # каталог нужен пикеру и поиску так же, как индекс
             _tpl_index_sync(man)
             meta = _tpl_meta()
             if meta:

@@ -15,6 +15,8 @@ window.I18N_EN = {
   "Большой список: домены лежат одним файлом, ключевые слова и IP — другим. Панель подключает оба сама.": "A large list: domains are in one file, keywords and IPs in another. The panel connects both by itself.",
   "Сборник blackmatrix7 для пользователей из Китая. Для обхода блокировок в России обычно не нужен — лучше взять шаблоны нужных сервисов.": "A blackmatrix7 bundle for users in China. Usually not needed to bypass blocks in Russia; pick the templates of the services you need instead.",
   "Ищу в шаблонах…": "Searching the templates…",
+  "Показать:": "Show:",
+  "Показать пути файлов для платформы": "Show file paths for the platform",
   "Готовые списки сайтов и IP для сервисов: зеркало": "Ready-made lists of sites and IPs for services: a mirror of",
   "и шаблоны byFox на": "and byFox templates on",
   ". Списки обновляются сами. Нажмите «?», чтобы прочитать, что входит в шаблон.": ". The lists update by themselves. Press “?” to read what a template contains.",
