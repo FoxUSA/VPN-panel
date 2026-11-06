@@ -68,6 +68,35 @@ async function doLogin() {
   if (res.ok) {
     const loginData = await res.clone().json().catch(() => ({}));
     enrichLoginAuditWithRealIp(loginData.audit_id);
+    _enterDashboard();
+  } else {
+    document.getElementById('loginError').textContent = 'Неверный пароль';
+    document.getElementById('passwordInput').value = '';
+  }
+}
+
+// Вход без пароля с адреса из списка «Вход без пароля по IP». Сервер решает
+// сам и отвечает только да/нет; пока ждём ответа, форму пароля не показываем,
+// чтобы она не мигнула перед панелью.
+(async function _autoLoginProbe() {
+  const box = document.querySelector('#loginScreen .login-box');
+  if (box) box.style.visibility = 'hidden';
+  const show = () => { if (box) box.style.visibility = ''; };
+  const t = setTimeout(show, 2500);
+  try {
+    const r = await fetch(API + '/api/login/auto', {method: 'POST'});
+    const j = await r.json().catch(() => ({}));
+    if (r.ok && j.ok) { clearTimeout(t); show(); _enterDashboard(); return; }
+  } catch (_) {}
+  clearTimeout(t);
+  show();
+})();
+
+let _dashboardEntered = false;
+function _enterDashboard() {
+  if (_dashboardEntered) return;
+  _dashboardEntered = true;
+  {
     document.getElementById('loginScreen').classList.add('hidden');
     document.getElementById('dashboard').classList.remove('hidden');
     if (window.i18nApply) window.i18nApply();
@@ -102,9 +131,6 @@ async function doLogin() {
     refreshTimer = setInterval(refreshAll, 15000);
     setInterval(refreshDepsBadge, 5 * 60 * 1000);
     setInterval(refreshAuditStrip, 8000);
-  } else {
-    document.getElementById('loginError').textContent = 'Неверный пароль';
-    document.getElementById('passwordInput').value = '';
   }
 }
 
@@ -114,6 +140,7 @@ async function doLogout() {
   const loginPath = (_serverConfig && _serverConfig.login_path) || '/login.html';
   await fetch(API + '/api/logout', {method: 'POST'});
   clearInterval(refreshTimer);
+  _dashboardEntered = false;
   if (fakeOn || keyOnly) {
     // Корень отдаёт фейк-сайт (fake) или 404 (key-only) — уводим на адрес-ключ.
     window.location.href = loginPath;
@@ -1576,7 +1603,7 @@ const SETTINGS_ITEMS = [
   {
     id: 'server_name',
     title: 'Сервер и обновления',
-    desc: 'Имя сервера (в шапке и в именах конфигов), обновление панели, гео-баз и шаблонов blackmatrix7, смена пароля входа.',
+    desc: 'Имя сервера (в шапке и в именах конфигов), обновление панели, гео-баз и шаблонов blackmatrix7, пароль и вход без пароля по IP.',
     open: () => openServerUpdatesModal(),
   },
   {
@@ -2017,7 +2044,10 @@ async function _saveTabOrder(group) {
 // var, не const: рендер карточек из кеша может вызваться раньше этой строки.
 var CLIENT_ORDER_KEY = 'awgPanel:clientOrder';
 // группа → id контейнера списка. Ключ карточки — data-ckey.
-var CLIENT_ORDER_GROUPS = {xray: 'xrayList', awg: 'peersList', hy: 'hyList'};
+var CLIENT_ORDER_GROUPS = {xray: 'xrayList', awg: 'peersList', hy: 'hyList', tgweb: 'tgList', mtg: 'mtgRecipientsGrid'};
+// Сетка (плашки в несколько колонок): копия едет за курсором по обеим осям,
+// место вставки ищется по строке и половине плашки, а не по середине высоты.
+var CLIENT_ORDER_GRID = {mtg: true};
 var _clientDrag = null;              // идёт перетаскивание: перерисовка этого списка ждёт
 var _clientDragDeferred = {};      // группа → отложенная перерисовка
 
@@ -2048,7 +2078,7 @@ function _clientDragDefer(group, fn) {
 }
 
 function _clientCards(box) {
-  return [...box.children].filter(el => el.matches('.peer-card[data-ckey]'));
+  return [...box.children].filter(el => el.matches('[data-ckey]'));
 }
 
 // Карточки, уже нарисованные из кеша до прихода server.json, — расставить по
@@ -2118,32 +2148,39 @@ async function _saveClientOrder(group) {
     const g = st.el.cloneNode(true);
     g.querySelectorAll('[id]').forEach(n => n.removeAttribute('id'));
     g.classList.add('collapsed', 'client-drag-ghost');
-    g.style.cssText = `position:fixed;left:${r.left}px;top:${r.top}px;width:${r.width}px;margin:0;`;
+    // Дописываем, а не заменяем: у плашек MTProto фон и flex заданы inline.
+    g.style.cssText += `;position:fixed;left:${r.left}px;top:${r.top}px;width:${r.width}px;margin:0;`;
     document.body.appendChild(g);
     const gh = g.getBoundingClientRect().height;
     st.ghost = g;
     st.oy = Math.max(8, Math.min(st.y0 - r.top, gh - 8));
+    st.ox = Math.max(8, Math.min(st.x0 - r.left, r.width - 8));
     // Раскрытую карточку на время переноса сворачиваем: огромное окно на её
     // месте мешало бы целиться. После отпускания она раскроется обратно.
-    st.wasOpen = !st.el.classList.contains('collapsed');
+    st.wasOpen = st.el.classList.contains('peer-card') && !st.el.classList.contains('collapsed');
     if (st.wasOpen) st.el.classList.add('collapsed');
     st.el.classList.add('client-drag-placeholder');
     document.body.classList.add('client-dragging');
     st.dragging = true;
     _clientDrag = st;
-    follow(st.y);
+    follow(st.y, st.x);
     st.raf = requestAnimationFrame(autoScroll);
   }
 
-  function follow(y) {
+  function follow(y, x) {
     st.ghost.style.top = (y - st.oy) + 'px';
+    if (st.grid && x != null) st.ghost.style.left = (x - st.ox) + 'px';
     // Встать перед первой карточкой, чья середина ниже курсора; таких нет —
     // в самый конец. Global rules в siblings нет, поэтому выше неё не встать.
+    // В сетке — перед первой плашкой, что целиком ниже курсора или в его
+    // строке правее середины.
     const sibs = siblings();
     let target = null;
     for (const el of sibs) {
       const b = el.getBoundingClientRect();
-      if (y < b.top + b.height / 2) { target = el; break; }
+      if (st.grid) {
+        if (y < b.top || (y <= b.bottom && x < b.left + b.width / 2)) { target = el; break; }
+      } else if (y < b.top + b.height / 2) { target = el; break; }
     }
     if (target) {
       if (st.el.nextElementSibling !== target) moveWithFlip(() => st.box.insertBefore(st.el, target));
@@ -2163,7 +2200,7 @@ async function _saveClientOrder(group) {
     if (dy) {
       const was = window.scrollY;
       window.scrollBy(0, dy);
-      if (window.scrollY !== was) follow(y);
+      if (window.scrollY !== was) follow(y, st.x);
     }
     st.raf = requestAnimationFrame(autoScroll);
   }
@@ -2204,6 +2241,7 @@ async function _saveClientOrder(group) {
   function onMove(e) {
     if (!st) return;
     st.y = e.clientY;
+    st.x = e.clientX;
     if (!st.dragging) {
       const far = Math.abs(e.clientX - st.x0) + Math.abs(e.clientY - st.y0) > 6;
       if (st.touch) { if (far) finish(false); return; }  // палец поехал до долгого нажатия — это прокрутка
@@ -2212,7 +2250,7 @@ async function _saveClientOrder(group) {
       if (!st) return;
     }
     e.preventDefault();
-    follow(e.clientY);
+    follow(e.clientY, e.clientX);
   }
   function onUp() { if (st) finish(true); }
   function onCancel() { if (st) finish(!!st.dragging); }
@@ -2222,16 +2260,16 @@ async function _saveClientOrder(group) {
     if (st || _clientDrag || e.button !== 0 || !e.target.closest) return;
     // Ручка — только левая часть шапки (имя и бейджи). Ряд кнопок справа не
     // ручка: там курсор мигал бы между стрелкой кнопок и «рукой» в зазорах.
-    const handle = e.target.closest('.peer-top > .peer-name');
+    // Плашка получателя MTProto (сетка) — ручка её имя (.mtg-rec-name).
+    const handle = e.target.closest('.peer-top > .peer-name, .mtg-rec-name');
     if (!handle || e.target.closest(NOT_HANDLE)) return;
-    const top = handle.parentNode;
-    const el = top.parentNode;
-    if (!el || !el.matches || !el.matches('.peer-card[data-ckey]')) return;
+    const el = handle.closest('[data-ckey]');
+    if (!el) return;
     const box = el.parentNode;
     const group = Object.keys(CLIENT_ORDER_GROUPS).find(g => box && box.id === CLIENT_ORDER_GROUPS[g]);
     if (!group) return;
-    st = {group, box, el, x0: e.clientX, y0: e.clientY, y: e.clientY, dragging: false,
-          touch: e.pointerType === 'touch'};
+    st = {group, box, el, x0: e.clientX, y0: e.clientY, y: e.clientY, x: e.clientX, dragging: false,
+          touch: e.pointerType === 'touch', grid: !!CLIENT_ORDER_GRID[group]};
     if (st.touch) {
       // На телефоне список листается пальцем — тащим по долгому нажатию.
       st.timer = setTimeout(() => {
@@ -4833,6 +4871,13 @@ async function checkForUpdates() {
 function openServerUpdatesModal() {
   const nameEl = document.getElementById('suServerNameInput');
   if (nameEl) nameEl.value = (_serverConfig && _serverConfig.server_name) || '';
+  _suIps = ((_serverConfig && _serverConfig.login_allow_ips) || []).slice();
+  _suMyIp = null;
+  const ipIn = document.getElementById('suIpInput');
+  if (ipIn) ipIn.value = '';
+  _suIpSetHint('');
+  _suIpRender();
+  _suIpLoadMine();
   renderServerUpdates();
   _suBaseline = _suSnapshot();   // эталон для «Сохранить» (неактивна пока нет изменений)
   _suCheckDirty();
@@ -4851,7 +4896,115 @@ function _suSnapshot() {
     pi: v('suPanelInterval'), pa: c('suPanelAuto'),
     gi: v('suGeoInterval'),   ga: c('suGeoAuto'),
     bi: v('suBm7Interval'),   ba: c('suBm7Auto'),
+    ips: _suIps.slice(),
   });
+}
+
+// ---- Вход без пароля по IP ----------------------------------------------
+// Список правится здесь, на сервер уходит общей кнопкой «Сохранить».
+let _suIps = [];
+let _suMyIp = null;   // null — ещё не спросили, '' — сервер не видит IP надёжно
+const SU_IPS_MAX = 50;
+
+function _suIpSetHint(msg, err) {
+  const h = document.getElementById('suIpHint');
+  if (!h) return;
+  h.textContent = msg || '';
+  h.classList.toggle('err', !!err);
+}
+
+// Поле IP: только цифры, точка встаёт сама после трёх цифр. Короткое число
+// закрывается точкой вручную (запятая и пробел тоже считаются точкой —
+// цифровая клавиатура телефона в русской раскладке даёт запятую).
+function _suIpFormat(raw, deleting) {
+  const parts = [''];
+  for (const ch of String(raw || '').replace(/[,\s]/g, '.')) {
+    if (ch >= '0' && ch <= '9') {
+      if (parts[parts.length - 1].length === 3) {
+        if (parts.length === 4) break;
+        parts.push('');
+      }
+      parts[parts.length - 1] += ch;
+    } else if (ch === '.') {
+      if (parts[parts.length - 1] !== '' && parts.length < 4) parts.push('');
+    }
+  }
+  let out = parts.join('.');
+  // Точка после третьей цифры — сама, но не когда человек стирает:
+  // иначе Backspace по точке возвращал бы её обратно.
+  const last = parts[parts.length - 1];
+  if (!deleting && last.length === 3 && parts.length < 4) out += '.';
+  return out;
+}
+
+function _suIpValid(ip) {
+  const p = String(ip || '').split('.');
+  return p.length === 4 && p.every(x => /^\d{1,3}$/.test(x) && +x <= 255);
+}
+
+function _suIpMask(el, e) {
+  const deleting = !!(e && e.inputType && e.inputType.startsWith('delete'));
+  const v = _suIpFormat(el.value, deleting);
+  if (v !== el.value) el.value = v;
+  const big = v.split('.').some(x => x !== '' && +x > 255);
+  _suIpSetHint(big ? 'Каждое число от 0 до 255' : '', big);
+}
+
+function suIpAdd(ipArg) {
+  const el = document.getElementById('suIpInput');
+  const ip = (ipArg || (el ? el.value : '')).replace(/\.$/, '');
+  if (!ip) { if (el) el.focus(); return; }
+  if (!_suIpValid(ip)) { _suIpSetHint('Нужно четыре числа от 0 до 255 через точку', true); return; }
+  // Сервер пускает по IP только с публичных адресов: внутренний он не увидит.
+  if (/^(10|127)\.|^192\.168\.|^169\.254\.|^172\.(1[6-9]|2\d|3[01])\.|^0\./.test(ip)) {
+    _suIpSetHint('Это внутренний адрес — снаружи панель его не увидит', true); return;
+  }
+  if (_suIps.includes(ip)) { _suIpSetHint('Этот IP уже в списке', true); return; }
+  if (_suIps.length >= SU_IPS_MAX) { _suIpSetHint('Не больше 50 адресов', true); return; }
+  _suIps.push(ip);
+  if (!ipArg && el) el.value = '';
+  _suIpSetHint('');
+  _suIpRender();
+  _suCheckDirty();
+}
+
+function suIpRemove(ip) {
+  _suIps = _suIps.filter(x => x !== ip);
+  _suIpRender();
+  _suCheckDirty();
+}
+
+function _suIpRender() {
+  const list = document.getElementById('suIpList');
+  if (list) {
+    const x = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>';
+    list.innerHTML = _suIps.length
+      ? _suIps.map(ip => `<span class="su-ip-chip${ip === _suMyIp ? ' is-mine' : ''}">${escHtml(ip)}` +
+          `<button type="button" class="su-ip-x" title="Убрать из списка" aria-label="Убрать из списка" onclick="suIpRemove('${escAttr(ip)}')">${x}</button></span>`).join('')
+      : '<span class="su-ip-empty">Список пуст — пароль спрашивается у всех.</span>';
+  }
+  const mine = document.getElementById('suIpMine');
+  if (!mine) return;
+  mine.classList.remove('warn');
+  if (_suMyIp === null) { mine.innerHTML = ''; return; }
+  if (!_suMyIp) {
+    mine.classList.add('warn');
+    mine.textContent = 'Панель сейчас не видит ваш IP надёжно: вход идёт через XRay напрямую, а там адрес легко подделать. ' +
+      'Без пароля пустит при входе через порт панели, через вход на 443 без XRay или когда установлен Telegram WEB.';
+    return;
+  }
+  mine.innerHTML = `<span>Ваш IP сейчас:</span> <b>${escHtml(_suMyIp)}</b>` +
+    (_suIps.includes(_suMyIp)
+      ? ' <span>— уже в списке</span>'
+      : ` <button type="button" class="btn btn-sm btn-ghost" onclick="suIpAdd('${escAttr(_suMyIp)}')">Добавить мой IP</button>`);
+}
+
+async function _suIpLoadMine() {
+  try {
+    const r = await fetch(API + '/api/login/allow-ips');
+    const j = await r.json().catch(() => ({}));
+    if (r.ok && j.ok) { _suMyIp = j.my_ip || ''; _suIpRender(); }
+  } catch (_) {}
 }
 let _suBaseline = '';
 function _suCheckDirty() {
@@ -4988,6 +5141,10 @@ async function suSaveAll() {
     bm7_check_interval_days: intv('suBm7Interval'),
     bm7_auto_update: document.getElementById('suBm7Auto').checked,
   };
+  // Список IP шлём, только если он менялся: иначе каждое «Сохранить» писало бы
+  // в журнал строку про доступ к панели.
+  const prevIps = (_serverConfig && _serverConfig.login_allow_ips) || [];
+  if (JSON.stringify(prevIps) !== JSON.stringify(_suIps)) body.login_allow_ips = _suIps.slice();
   const btn = document.getElementById('suSaveBtn');
   const orig = btn.textContent; btn.disabled = true; btn.textContent = 'Сохраняю…';
   try {
@@ -10503,19 +10660,22 @@ async function refreshMtgRecipients() {
     const res = await fetch(API + '/api/mtg/recipients');
     if (!res.ok) return;
     const data = await res.json();
-    const items = (data.recipients || []);
+    // Перетаскивание плашек (блок «Порядок клиентов»): пока плашку держат,
+    // сетку не перерисовываем — обновится после отпускания.
+    if (_clientDragDefer('mtg', refreshMtgRecipients)) return;
+    const items = _clientOrderSort('mtg', data.recipients || [], r => r.id);
     const rows = items.map(r => {
       const id = escAttr(r.id);
       const name = escHtml(r.name || '');
       const nameAttr = escAttr(r.name || '');
-      return `<div style="display:flex;align-items:center;gap:4px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg2,#1a1a1a);min-width:0;">
-        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;" title="${name}">${name}</span>
+      return `<div class="mtg-rec" data-ckey="${id}" style="display:flex;align-items:center;gap:4px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg2,#1a1a1a);min-width:0;">
+        <span class="mtg-rec-name" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;" title="${name}">${name}</span>
         <button class="mtg-rec-icon" data-act="rename" data-id="${id}" data-name="${nameAttr}" title="Переименовать" aria-label="Переименовать">${_pencilSvg()}</button>
         <button class="mtg-rec-icon danger" data-act="delete" data-id="${id}" data-name="${nameAttr}" title="Удалить" aria-label="Удалить">${_trashSvg()}</button>
       </div>`;
     }).join('');
     const addCell = `<button data-act="add" class="mtg-rec-add" title="Добавить запись" aria-label="Добавить запись" style="display:flex;align-items:center;justify-content:center;gap:4px;padding:4px 8px;border:1px dashed var(--border);border-radius:6px;background:transparent;color:var(--text3);min-width:0;cursor:pointer;font-size:13px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>`;
-    box.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:6px;">${rows}${addCell}</div>`;
+    box.innerHTML = `<div id="mtgRecipientsGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:6px;">${rows}${addCell}</div>`;
     box.querySelectorAll('button[data-act]').forEach(b => {
       b.addEventListener('click', () => {
         const act = b.getAttribute('data-act');

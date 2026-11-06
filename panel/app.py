@@ -1199,6 +1199,63 @@ def load_or_create_secret_key():
 app.secret_key = load_or_create_secret_key()
 app.config['PERMANENT_SESSION_LIFETIME'] = 7 * 24 * 3600
 
+# === Вход без пароля с доверенных IP (login_allow_ips) ===
+# Пускать по IP можно только там, где IP клиента известен НАДЁЖНО. gunicorn
+# слушает 127.0.0.1, поэтому настоящий адрес приходит заголовком X-Real-IP от
+# nginx. Но фоллбек XRay ведёт и прямо во Flask (dest 5000), и тогда любой
+# заголовок, включая X-Real-IP, пишет сам клиент. Отличить «nginx панели» от
+# «клиент через XRay» помогает метка: наши nginx-блоки (порт панели, вход на
+# 443, Telegram WEB) ставят X-Panel-Proxy с секретом, выведенным из ключа
+# сессий. proxy_set_header ЗАМЕНЯЕТ одноимённый заголовок клиента, а сам
+# секрет лежит только в конфигах nginx (root). Нет метки — IP неизвестен, и
+# пароль спрашивается всегда.
+# Адрес клиента идёт рядом своим заголовком X-Panel-Client, а не X-Real-IP:
+# между нашим nginx и панелью бывает ещё nginx сайта (Telegram WEB → фейк-сайт
+# на 8444 → панель), и он переписывает X-Real-IP на 127.0.0.1. Незнакомые
+# заголовки nginx пропускает дальше как есть.
+PROXY_TRUST_HEADER = 'X-Panel-Proxy'
+PROXY_CLIENT_HEADER = 'X-Panel-Client'
+LOGIN_ALLOW_IPS_MAX = 50
+
+
+def _proxy_trust_token():
+    # v2: с X-Panel-Client. Старая метка (без него) недействительна: иначе в старом
+    # блоке до самолечения клиент мог бы прислать X-Panel-Client сам.
+    return hmac.new(app.secret_key.encode(), b'awg-panel/proxy-trust/v2', hashlib.sha256).hexdigest()[:40]
+
+
+def proxy_trust_nginx_line(client='$remote_addr', indent='        '):
+    """Строки для location, который проксирует к панели: метка + адрес клиента.
+    client — переменная nginx с настоящим адресом ($remote_addr или
+    $proxy_protocol_addr за фоллбеком XRay)."""
+    return (f'{indent}proxy_set_header {PROXY_TRUST_HEADER} {_proxy_trust_token()};\n'
+            f'{indent}proxy_set_header {PROXY_CLIENT_HEADER} {client};\n')
+
+
+def _trusted_client_ip():
+    """Публичный IPv4 клиента, если он известен надёжно, иначе ''."""
+    try:
+        ra = request.remote_addr or ''
+        if ra and not ra.startswith('127.') and ra != '::1':
+            ip = ra  # панель слушает не только loopback — адрес из TCP-соединения
+        else:
+            got = request.headers.get(PROXY_TRUST_HEADER) or ''
+            if not got or not hmac.compare_digest(got, _proxy_trust_token()):
+                return ''
+            # Старые блоки (до X-Panel-Client) — только X-Real-IP.
+            ip = (request.headers.get(PROXY_CLIENT_HEADER) or request.headers.get('X-Real-IP') or '').strip()
+        # Loopback/внутренний адрес ничего не говорит о клиенте.
+        if not _is_valid_ipv4(ip) or _is_private_ip(ip):
+            return ''
+        return ip
+    except Exception:
+        return ''
+
+
+def _login_allow_ips():
+    v = SERVER_CFG.get('login_allow_ips') or []
+    return [x for x in v if isinstance(x, str)] if isinstance(v, list) else []
+
 # AWG obfuscation params — MUST match the server's awg0.conf [Interface] section,
 # иначе handshake у клиента не пройдёт. На новом сервере amnezia-install генерирует
 # свежие H1-H4/Jc/Jmin/Jmax/S1/S2, поэтому читаем их прямо из awg0.conf.
@@ -1654,6 +1711,26 @@ def login():
         return jsonify({'ok': True, 'audit_id': rec_id})
     audit('warn', f'Login FAIL from {ip}')
     return jsonify({'error': 'Wrong password'}), 403
+
+@app.route('/api/login/auto', methods=['POST'])
+def login_auto():
+    """Вход без пароля, если IP клиента известен надёжно и стоит в списке.
+    Наружу отвечает только «да/нет»: почему нет — не сообщаем."""
+    ip = _trusted_client_ip()
+    if ip and ip in _login_allow_ips():
+        session.permanent = True
+        session['authenticated'] = True
+        rec_id = audit('info', f'Login OK from {ip} (по IP, без пароля)')
+        return jsonify({'ok': True, 'audit_id': rec_id, 'by_ip': True})
+    return jsonify({'ok': False})
+
+@app.route('/api/login/allow-ips', methods=['GET'])
+@login_required
+def login_allow_ips_get():
+    """Список IP для входа без пароля + как панель видит текущего клиента."""
+    my_ip = _trusted_client_ip()
+    return jsonify({'ok': True, 'ips': _login_allow_ips(), 'my_ip': my_ip,
+                    'max': LOGIN_ALLOW_IPS_MAX})
 
 @app.route('/api/audit/client-ip', methods=['POST'])
 @login_required
@@ -2160,6 +2237,7 @@ def server_config_get():
 def server_config_set():
     body = request.get_json(force=True) or {}
     allowed_keys = {'enabled_protocols', 'enabled_platforms', 'mtg_fake_host', 'sni', 'server_name', 'profile_naming', 'fake_enabled', 'login_path', 'login_block_root', 'settings_favorites', 'server_ip_override', 'tab_order', 'client_order',
+                    'login_allow_ips',
                     'panel_check_interval_days', 'panel_auto_update',
                     'geo_check_interval_days', 'geo_auto_update',
                     'bm7_check_interval_days', 'bm7_auto_update'}
@@ -2206,7 +2284,8 @@ def server_config_set():
             }
         if k == 'client_order':
             # Та же форма, что у tab_order, но ключи длиннее: uuid XRay, base64
-            # публичного ключа AWG (+ / =), id клиента Hysteria.
+            # публичного ключа AWG (+ / =), id клиента Hysteria / Telegram WEB,
+            # hex-id получателя MTProto.
             if not isinstance(v, dict):
                 return jsonify({'ok': False, 'error': 'client_order must be an object'}), 400
             v = {
@@ -2214,6 +2293,23 @@ def server_config_set():
                 for g, ids in v.items()
                 if isinstance(g, str) and re.fullmatch(r'[a-z0-9_]{1,20}', g) and isinstance(ids, list)
             }
+        if k == 'login_allow_ips':
+            if not isinstance(v, list):
+                return jsonify({'ok': False, 'error': 'login_allow_ips: ожидается список IPv4'}), 400
+            clean = []
+            for x in v:
+                x = str(x or '').strip()
+                if not x:
+                    continue
+                if not _is_valid_ipv4(x):
+                    return jsonify({'ok': False, 'error': f'Неверный IP: {x}'}), 400
+                if _is_private_ip(x) or x.startswith('0.'):
+                    return jsonify({'ok': False, 'error': f'{x} — внутренний адрес, снаружи панель его не увидит'}), 400
+                if x not in clean:
+                    clean.append(x)
+            if len(clean) > LOGIN_ALLOW_IPS_MAX:
+                return jsonify({'ok': False, 'error': f'Не больше {LOGIN_ALLOW_IPS_MAX} адресов'}), 400
+            v = clean
         if k == 'server_ip_override':
             v = (v or '').strip()
             # IP может не совпадать ни с одним локальным интерфейсом: в облаках с NAT
@@ -2225,7 +2321,7 @@ def server_config_set():
         changes[k] = v
     _save_server_config(SERVER_CFG)
     ip = _client_ip()
-    sensitive = {'fake_enabled', 'login_block_root', 'login_path', 'server_ip_override'}
+    sensitive = {'fake_enabled', 'login_block_root', 'login_path', 'server_ip_override', 'login_allow_ips'}
     for k in sensitive:
         if k in changes:
             audit('warn', f'Server config [{k}] → {changes[k]!r} (from {ip})')
@@ -2366,6 +2462,7 @@ def _apply_panel_access_port(port):
             f'        proxy_set_header X-Real-IP $remote_addr;\n'
             f'        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n'
             f'        proxy_set_header X-Forwarded-Proto {scheme};\n'
+            f'{proxy_trust_nginx_line()}'
             f'    }}\n'
             f'}}\n')
     prev_content = None
@@ -11051,6 +11148,7 @@ def _panel_443_sync():
             f'        proxy_set_header X-Real-IP $remote_addr;\n'
             f'        proxy_set_header X-Forwarded-For $remote_addr;\n'
             f'        proxy_set_header X-Forwarded-Proto https;\n'
+            f'{proxy_trust_nginx_line()}'
             f'    }}\n'
             f'}}\n')
     cur = None
@@ -11135,6 +11233,33 @@ def _panel_nginx_heal_redirect():
     run_cmd('systemctl reload nginx')
 
 
+def _panel_nginx_heal_trust():
+    """Дописывает метку доверенного прокси (вход по IP) в уже опубликованный
+    блок порта панели — одной строкой после X-Real-IP и с откатом."""
+    try:
+        with open(PANEL_NGINX_SITE) as f:
+            old = f.read()
+    except OSError:
+        return
+    line = proxy_trust_nginx_line()
+    if line in old:
+        return
+    # Старая метка (сменился secret.key) — убрать, затем вставить новую.
+    base = re.sub(r'[ \t]*proxy_set_header (?:' + PROXY_TRUST_HEADER + '|' + PROXY_CLIENT_HEADER + r') [^\n]*\n', '', old)
+    new = re.sub(r'([ \t]*proxy_set_header X-Real-IP [^\n]*\n)', lambda m: m.group(1) + line, base, count=1)
+    if new == base:
+        return
+    with open(PANEL_NGINX_SITE, 'w') as f:
+        f.write(new)
+    _, err, rc = run_cmd('nginx -t')
+    if rc != 0:
+        with open(PANEL_NGINX_SITE, 'w') as f:
+            f.write(old)
+        audit('warn', f'Доступ к панели: метка для входа по IP не добавлена: {err}')
+        return
+    run_cmd('systemctl reload nginx')
+
+
 def _panel_port_boot():
     """Вход в панель снаружи на новом сервере — без SSH-туннеля и без XRay.
 
@@ -11149,6 +11274,7 @@ def _panel_port_boot():
         port = int(SERVER_CFG.get('panel_port') or 0)
         if port:
             _panel_nginx_heal_redirect()
+            _panel_nginx_heal_trust()
             if SERVER_CFG.get('panel_port_auto') and _find_le_cert() and os.path.exists(PANEL_NGINX_SITE):
                 with open(PANEL_NGINX_SITE) as f:
                     plain = ' ssl;' not in f.read()
@@ -12104,6 +12230,8 @@ try:
 
     tgweb_pkg.register(app, {
         'panel_443_release': _panel_443_release,
+        # Метка доверенного прокси для входа по IP (location / → панель).
+        'proxy_trust_line': proxy_trust_nginx_line,
         'login_required': login_required,
         'audit': audit,
         'job_start': _dep_fix_job_start,

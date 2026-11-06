@@ -322,13 +322,19 @@
 
     var list = document.getElementById('tgList');
     if (!list) return;
+    // Перетаскивание карточек (app.js): пока карточку держат, список не
+    // перерисовываем — он обновится сразу после отпускания.
+    if (typeof _clientDragDefer === 'function' && _clientDragDefer('tgweb', render)) return;
+    var ordered = typeof _clientOrderSort === 'function'
+      ? _clientOrderSort('tgweb', state.clients, function (c) { return String(c.id); })
+      : state.clients;
     if (!st.installed && !state.clients.length) {
       list.innerHTML = '';
     } else if (!state.clients.length) {
       list.innerHTML = '<div class="empty-state"><div class="icon">&#9992;</div>' +
         '<p>Клиентов пока нет. У каждого будет своя ссылка: отключить одного — остальные работают.</p></div>';
     } else {
-      list.innerHTML = state.clients.map(clientCard).join('');
+      list.innerHTML = ordered.map(clientCard).join('');
     }
     refreshCollapseAllBtn();
   }
@@ -418,7 +424,8 @@
         ' ' + esc(c.scheduled_at || '') + '</span>';
     }
     return '' +
-      '<div class="peer-card' + (collapsed ? ' collapsed' : '') + '" data-id="' + esc(id) + '">' +
+      '<div class="peer-card' + (collapsed ? ' collapsed' : '') + '" data-id="' + esc(id) +
+        '" data-ckey="' + esc(id) + '">' +
         '<div class="peer-top">' +
           '<div class="peer-name">' +
             '<div class="peer-name-row">' +

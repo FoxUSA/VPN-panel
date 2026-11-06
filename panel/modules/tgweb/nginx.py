@@ -18,7 +18,7 @@ import os
 import shutil
 import time
 
-from . import (NGINX_AVAILABLE, NGINX_BACKUP_DIR, NGINX_ENABLED, audit, load_settings,
+from . import (DEPS, NGINX_AVAILABLE, NGINX_BACKUP_DIR, NGINX_ENABLED, audit, load_settings,
                run_cmd)
 
 MARK = '# awg-panel: Telegram WEB-прокси'
@@ -85,6 +85,14 @@ def render(cfg=None, prev_port=None):
                   '    server_name _;\n' % nport)
         client = '$proxy_protocol_addr'
         head = ''
+    # Метка доверенного прокси: по ней панель верит X-Real-IP (вход по IP без
+    # пароля). Секрет знает только панель — берём строку у неё.
+    trust = ''
+    try:
+        fn = DEPS.get('proxy_trust_line')
+        trust = fn(client) if fn else ''
+    except Exception:
+        trust = ''
     # map — уровень http; файлы sites-enabled подключаются внутри http, так что
     # ему здесь место. Имя переменной своё, чтобы не столкнуться с чужим
     # $connection_upgrade из соседних конфигов.
@@ -134,13 +142,14 @@ def render(cfg=None, prev_port=None):
         '        proxy_set_header X-Real-IP %(client)s;\n'
         '        proxy_set_header X-Forwarded-For %(client)s;\n'
         '        proxy_set_header X-Forwarded-Proto https;\n'
+        '%(trust)s'
         '        proxy_set_header Upgrade $http_upgrade;\n'
         '        proxy_set_header Connection $awg_tgweb_upgrade;\n'
         '        proxy_read_timeout 300s;\n'
         '    }\n'
         '}\n'
     ) % {'mark': MARK, 'head': head, 'listen': listen, 'client': client, 'wport': wport,
-         'slug': slug, 'prev': int(prev_port or 5000)}
+         'slug': slug, 'prev': int(prev_port or 5000), 'trust': trust}
 
 
 def current_text():
