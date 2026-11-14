@@ -259,7 +259,7 @@ DEFAULT_SERVER_CONFIG = {
 SETTINGS_ITEM_IDS = {
     'server_name', 'profile_naming', 'protocols', 'password',
     'audit', 'backup_settings', 'backup_quick', 'system_paths',
-    'truths', 'dependencies', 'fake_landing', 'health', 'mihomo',
+    'truths', 'dependencies', 'fake_landing', 'health', 'mihomo', 'server_dns',
 }
 
 # Routes that must NEVER be shadowed by the fake-landing catch-all.
@@ -4211,8 +4211,14 @@ def _reconcile_xray_dns_cfg(cfg):
     из Global. Чистая мутация без IO и lock. True — если cfg изменился.
 
     Секцией dns владеет панель: DNS выключен в Global → секции в конфиге нет.
+    Включён «DNS сервера» (Настройки) → секции тоже нет: XRay спрашивает систему,
+    а система уже ходит в выбранный там резолвер — один DNS на весь сервер.
     """
-    want = _xray_dns_section(_global_dns_default())
+    sd = globals().get('server_dns')
+    if sd is not None and sd.is_enabled():
+        want = None
+    else:
+        want = _xray_dns_section(_global_dns_default())
     changed = False
     if want is None:
         if 'dns' in cfg:
@@ -5445,7 +5451,9 @@ def api_dns_templates():
 def api_dns_default():
     """DNS-дефолт для НОВЫХ юзеров (server.json). Правится из модалки Global."""
     if request.method == 'GET':
-        return jsonify({'dns': _global_dns_default()})
+        sd = globals().get('server_dns')
+        return jsonify({'dns': _global_dns_default(),
+                        'server_dns': bool(sd is not None and sd.is_enabled())})
     data = request.get_json(silent=True) or {}
     dns = _norm_dns(data.get('dns'))
     SERVER_CFG['dns_default'] = dns
@@ -12085,6 +12093,27 @@ except Exception as _mh_err:
     print(f'[mihomo] отключён: {MIHOMO_IMPORT_ERROR}', flush=True)
 else:
     MIHOMO_IMPORT_ERROR = ''
+
+
+# === DNS самого сервера (modules/server_dns.py) ==============================
+try:
+    from modules import server_dns
+
+    server_dns.init({
+        'audit': audit,
+        'login_required': login_required,
+        '_save_server_config': _save_server_config,
+        'apply_xray_dns': apply_xray_dns,
+        'asn_lookup': asn_lookup,
+        'SERVER_CFG': SERVER_CFG,
+        'DATA_DIR': DATA_DIR,
+        'PANEL_VERSION': PANEL_VERSION,
+    })
+    app.register_blueprint(server_dns.bp)
+    server_dns.start_background()
+except Exception as _sd_err:
+    server_dns = None
+    print(f'[server_dns] отключён: {_sd_err}', flush=True)
 
 
 # === Установка/обновление AmneziaWG (awg_install.py) ========================

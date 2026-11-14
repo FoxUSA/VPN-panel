@@ -1639,10 +1639,20 @@ const SETTINGS_ITEMS = [
     open: () => openBackupModal(),
   },
   {
+    // В списке «Настроек» не показывается — только пункт меню ⚙. Включается
+    // переключателем «В меню ⚙» в окне «Настройка бэкапа».
     id: 'backup_quick',
+    hub: false,
     title: 'Сделать бэкап',
     desc: 'Разовый бэкап прямо сейчас по текущим настройкам.',
     open: () => backupQuickRun(),
+  },
+  {
+    id: 'server_dns',
+    title: 'DNS сервера',
+    desc: 'Через какой резолвер сервер резолвит весь трафик, что через него идёт: XRay, Hysteria, mtg и сама панель. ' +
+          'Адрес — в любом виде (IP, DoH, DoT, DoQ, sdns://), панель сама распознает и проверит.',
+    open: () => openServerDnsModal(),
   },
   {
     id: 'system_paths',
@@ -1710,7 +1720,7 @@ function openSettingsModal() {
 function renderSettingsModalList() {
   const list = document.getElementById('settingsModalList');
   const favs = _getSettingsFavSet();
-  list.innerHTML = SETTINGS_ITEMS.map(it => {
+  list.innerHTML = SETTINGS_ITEMS.filter(it => it.hub !== false).map(it => {
     const isFav = favs.has(it.id);
     return `
       <div class="settings-hub-item">
@@ -1750,10 +1760,23 @@ async function toggleSettingFav(id) {
     _serverConfig = j.config;
     renderSettingsModalList();
     renderGearFavorites();
+    _renderBackupFavBtn();
   } catch (e) {
     toast('Сеть: не сохранено');
   }
 }
+
+// «В меню ⚙» в окне бэкапа — тот же список избранного, что у звёзд в «Настройках».
+function _renderBackupFavBtn() {
+  const b = document.getElementById('bkFavBtn');
+  if (!b) return;
+  const on = _getSettingsFavSet().has('backup_quick');
+  b.classList.toggle('is-fav', on);
+  b.textContent = (on ? '★' : '☆') + ' В меню ⚙';
+  b.title = on ? 'Убрать «Сделать бэкап» из меню шестерёнки'
+               : 'Добавить «Сделать бэкап» в меню шестерёнки — бэкап в один клик';
+}
+function toggleBackupQuickFav() { toggleSettingFav('backup_quick'); }
 
 document.addEventListener('click', e => {
   const m = document.getElementById('settingsMenu');
@@ -1832,6 +1855,7 @@ async function loadServerConfig() {
     if (ipEl) ipEl.textContent = _serverConfig.server_ip;
   }
   try { renderGearFavorites(); } catch (_) {}
+  try { _sdnsHeaderInit(); } catch (_) {}
   try { applyTabOrder(); } catch (_) {}
   try { applyClientOrderDom(); } catch (_) {}
   return _serverConfig;
@@ -5401,6 +5425,7 @@ async function loadAuditFull() {
 // ============================================================
 function openBackupModal() {
   document.getElementById('backupModal').classList.remove('hidden');
+  _renderBackupFavBtn();
   loadBackupStatus();
 }
 async function loadBackupStatus() {
@@ -5422,7 +5447,7 @@ async function loadBackupStatus() {
       ? extMissing.map(p => `<div class="bk-info-line"><span class="bk-info-bullet" style="color:var(--text3);">○</span><code style="color:var(--text3);">${escHtml(p)}</code> <span style="color:var(--text3);font-size:11px;">— файла нет, в архив не попадёт</span></div>`).join('')
       : '';
     const excludesHtml = excludes.length
-      ? excludes.map(x => `<code>${escHtml(x)}</code>`).join(' ')
+      ? '<span class="bk-chips">' + excludes.map(x => `<code>${escHtml(x)}</code>`).join('') + '</span>'
       : '<span style="color:var(--text3);">—</span>';
 
     document.getElementById('backupPathsInfo').innerHTML = `
@@ -5463,9 +5488,9 @@ function renderBackupList(items) {
     return;
   }
   el.innerHTML = items.map(it => `
-    <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--border);">
-      <div style="flex:1;min-width:0;">
-        <div style="color:var(--text);font-family:'JetBrains Mono',monospace;font-size:12px;overflow:hidden;text-overflow:ellipsis;">${escHtml(it.name)}</div>
+    <div class="bk-item">
+      <div class="bk-item-name">
+        <div style="color:var(--text);font-family:'JetBrains Mono',monospace;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escHtml(it.name)}">${escHtml(it.name)}</div>
         <div style="color:var(--text3);font-size:11px;">${_fmtServerTs(it.ts, true)} · ${it.size_h}</div>
       </div>
       <a class="btn btn-sm btn-ghost" href="${API}/api/backup/download/${encodeURIComponent(it.name)}" download>↓</a>
@@ -5709,6 +5734,9 @@ async function openDnsModal(kind, id, name) {
       const r = await fetch(API + '/api/dns/default');
       const j = await r.json();
       if (j.dns) { dns = j.dns; _globalDnsDefault = j.dns; }
+      const sd = !!j.server_dns;
+      document.getElementById('dnsGlobalSrvOwn').style.display = sd ? 'none' : '';
+      document.getElementById('dnsGlobalSrvLink').style.display = sd ? '' : 'none';
     } catch (e) {}
   } else {
     const c = _protoFindClient(kind, id);
@@ -13482,4 +13510,325 @@ async function mhSaveSettings() {
   _mhStatus = j;
   mhRenderModal();
   mhRenderStatus();
+}
+
+// ============================================================
+// DNS сервера («Настройки → DNS сервера», кнопка DNS в шапке).
+// Бэкенд — modules/server_dns.py. Включение/проверка идут фоном на сервере,
+// окно опрашивает /api/server-dns/job и показывает шаги.
+// ============================================================
+let _sdns = null;              // последний ответ GET /api/server-dns
+let _sdnsParsed = {main: [], fallback: []};
+let _sdnsParseTimer = null;
+let _sdnsPolling = false;
+let _sdnsHeaderTimer = null;
+
+function _sdnsEntryHtml(e) {
+  if (!e.ok) {
+    return `<div class="ln bad"><span class="mk">✗</span><span>${escHtml(e.raw)}</span> — <span>${escHtml(e.error)}</span></div>`;
+  }
+  const up = e.upstream.length > 70 ? e.upstream.slice(0, 67) + '…' : e.upstream;
+  let h = `<div class="ln"><span class="mk">✓</span><span>${escHtml(e.text)}</span><span class="up">${escHtml(up)}</span></div>`;
+  if (e.warning) h += `<div class="warn">${escHtml(e.warning)}</div>`;
+  return h;
+}
+
+function _sdnsRenderParsed() {
+  document.getElementById('sdnsMainParsed').innerHTML = (_sdnsParsed.main || []).map(_sdnsEntryHtml).join('');
+  document.getElementById('sdnsFbParsed').innerHTML = (_sdnsParsed.fallback || []).map(_sdnsEntryHtml).join('');
+}
+
+function _sdnsRenderStatus() {
+  const el = document.getElementById('sdnsStatus');
+  if (!_sdns) { el.innerHTML = ''; return; }
+  const s = _sdns.settings || {}, st = _sdns.state || {};
+  el.className = 'sdns-status';
+  if (!s.enabled) {
+    const up = (_sdns.system_upstream || []).join(', ');
+    el.innerHTML = up
+      ? `<b>Сейчас: DNS хостера</b> — <span>${escHtml(up)}</span>`
+      : '<b>Сейчас: DNS хостера</b>';
+    return;
+  }
+  const who = (_sdns.main || []).filter(e => e.ok).map(e => e.provider || e.host).filter(Boolean);
+  const whoTxt = [...new Set(who)].join(', ');
+  const when = st.checked_at ? _fmtServerTs(st.checked_at, true) : '';
+  if (st.ok === false) {
+    el.classList.add('bad');
+    el.innerHTML = `<b>DNS сервера не отвечает</b> — <span>${escHtml(st.error || '')}</span>` +
+                   (when ? ` · <span>проверено ${when}</span>` : '');
+    return;
+  }
+  el.classList.add('ok');
+  el.innerHTML = '<b>Работает: сервер резолвит через свой DNS</b>' +
+                 (whoTxt ? ` — <span>${escHtml(whoTxt)}</span>` : '') +
+                 (st.ok && when ? ` · <span>ответ ${st.ms} мс, проверено ${when}</span>` : '') +
+                 (_sdns.engine ? ` · <span>dnsproxy ${escHtml(_sdns.engine)}</span>` : '');
+}
+
+function _sdnsApplyHeader(state) {
+  const b = document.getElementById('srvDnsBtn');
+  if (!b || !state) return;
+  b.classList.toggle('hidden', !(state.enabled && state.show_button));
+  const bad = state.enabled && state.ok === false;
+  b.classList.toggle('is-bad', bad);
+  b.title = bad ? ('DNS сервера не отвечает: ' + (state.error || '')) : 'DNS сервера';
+}
+
+async function _sdnsHeaderRefresh() {
+  try {
+    const r = await fetch(API + '/api/server-dns/state');
+    if (!r.ok) return;
+    _sdnsApplyHeader(await r.json());
+  } catch (_) {}
+}
+function _sdnsHeaderInit() {
+  _sdnsHeaderRefresh();
+  if (!_sdnsHeaderTimer) _sdnsHeaderTimer = setInterval(_sdnsHeaderRefresh, 60000);
+}
+
+function _sdnsSaved() {
+  const s = (_sdns && _sdns.settings) || {};
+  return {enabled: !!s.enabled, main: (s.main || '').trim(), fallback: (s.fallback || '').trim()};
+}
+function _sdnsForm() {
+  return {
+    enabled: document.getElementById('sdnsEnabled').checked,
+    main: document.getElementById('sdnsMain').value.trim(),
+    fallback: document.getElementById('sdnsFb').value.trim(),
+  };
+}
+
+// «Применить» доступна, только когда есть что применять и это можно применить.
+function _sdnsDirty() {
+  const f = _sdnsForm(), s = _sdnsSaved();
+  let dirty = f.enabled !== s.enabled || (f.enabled && (f.main !== s.main || f.fallback !== s.fallback));
+  // Включён, но не отвечает — повторное «Применить» и есть починка.
+  if (f.enabled && s.enabled && _sdns && _sdns.state && _sdns.state.ok === false) dirty = true;
+  const bad = [...(_sdnsParsed.main || []), ...(_sdnsParsed.fallback || [])].some(e => !e.ok);
+  const okMain = (_sdnsParsed.main || []).some(e => e.ok);
+  if (f.enabled && (!okMain || bad)) dirty = false;
+  const btn = document.getElementById('sdnsApplyBtn');
+  btn.disabled = !dirty || _sdnsPolling;
+  btn.textContent = (!f.enabled && s.enabled) ? 'Выключить' : 'Применить';
+}
+
+function _sdnsOnInput() {
+  // Вставили адрес при выключенном «Свой DNS» — значит хотят включить.
+  const sw = document.getElementById('sdnsEnabled');
+  if (!sw.checked && !_sdnsSaved().enabled && document.getElementById('sdnsMain').value.trim()) sw.checked = true;
+  clearTimeout(_sdnsParseTimer);
+  _sdnsParseTimer = setTimeout(async () => {
+    try {
+      const f = _sdnsForm();
+      const r = await fetch(API + '/api/server-dns/parse', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({main: f.main, fallback: f.fallback}),
+      });
+      _sdnsParsed = await r.json();
+      _sdnsRenderParsed();
+    } catch (_) {}
+    _sdnsDirty();
+  }, 300);
+  _sdnsDirty();
+}
+
+function _sdnsRenderChips() {
+  const box = document.getElementById('sdnsChips');
+  box.innerHTML = ((_sdns && _sdns.templates) || []).map((t, i) =>
+    `<button type="button" class="sdns-chip" data-i="${i}">${escHtml(t.name)}</button>`).join('');
+  box.querySelectorAll('button[data-i]').forEach(b => b.addEventListener('click', () => {
+    const t = _sdns.templates[+b.dataset.i];
+    const inp = document.getElementById('sdnsMain');
+    inp.value = t.value;
+    inp.focus();
+    inp.setSelectionRange(inp.value.length, inp.value.length);
+    document.getElementById('sdnsEnabled').checked = true;
+    _sdnsOnInput();
+  }));
+}
+
+async function _sdnsLoad(fillInputs) {
+  const r = await fetch(API + '/api/server-dns');
+  const j = await r.json();
+  if (j.error) throw new Error(j.error);
+  _sdns = j;
+  if (fillInputs) {
+    document.getElementById('sdnsEnabled').checked = !!j.settings.enabled;
+    document.getElementById('sdnsMain').value = j.settings.main || '';
+    document.getElementById('sdnsFb').value = j.settings.fallback || '';
+    document.getElementById('sdnsShowBtn').checked = j.settings.show_button !== false;
+    _sdnsParsed = {main: j.main || [], fallback: j.fallback || []};
+    _sdnsRenderParsed();
+    _sdnsRenderChips();
+  }
+  _sdnsRenderStatus();
+  _sdnsDirty();
+  _sdnsApplyHeader(j.state);
+  return j;
+}
+
+async function openServerDnsModal() {
+  document.getElementById('serverDnsModal').classList.remove('hidden');
+  const out = document.getElementById('sdnsOut');
+  out.classList.add('hidden');
+  out.innerHTML = '';
+  try {
+    const j = await _sdnsLoad(true);
+    if (j.job && j.job.state === 'running') _sdnsPoll();
+  } catch (e) {
+    document.getElementById('sdnsStatus').innerHTML =
+      `<b>Не удалось загрузить настройки DNS</b> — <span>${escHtml(e.message)}</span>`;
+  }
+}
+
+async function _sdnsSaveButton() {
+  const on = document.getElementById('sdnsShowBtn').checked;
+  try {
+    const r = await fetch(API + '/api/server-dns/button', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({show_button: on}),
+    });
+    const j = await r.json();
+    if (j.state) _sdnsApplyHeader(j.state);
+    if (_sdns && _sdns.settings) _sdns.settings.show_button = on;
+  } catch (_) { toast('Сеть: не сохранено'); }
+}
+
+function _sdnsProbeHtml(label, p) {
+  if (!p) return '';
+  if (!p.ok) {
+    return `<div class="dns-check-line bad"><span class="mk">✗</span><b>${label}</b>: <span class="st">${escHtml(p.error || 'нет ответа')}</span></div>`;
+  }
+  const bits = [`<span>отвечает за ${p.ms} мс</span>`];
+  bits.push(p.ads ? '<span class="ads">режет рекламу</span>' : '<span>рекламу не режет</span>');
+  if (p.adult) bits.push('<span class="ads">фильтр 18+</span>');
+  let h = `<div class="dns-check-line ok"><span class="mk">✓</span><b>${label}</b>: ${bits.join(' · ')}</div>`;
+  if (p.egress_ip) {
+    h += `<div class="dns-check-sub"><span>Наружу ходит с адреса</span> ${escHtml(p.egress_ip)}` +
+         (p.egress_org ? ` — ${escHtml(p.egress_org)}` : '') + '</div>';
+  }
+  return h;
+}
+
+function _sdnsResultHtml(job) {
+  const r = job.result || {};
+  if (job.kind === 'check') {
+    return _sdnsProbeHtml('Основной DNS', r.main) + (r.fallback ? _sdnsProbeHtml('Запасной DNS', r.fallback) : '') +
+      '<div class="dns-check-foot">Проверено с сервера пробным запуском dnsproxy — так же, как он будет работать.</div>';
+  }
+  if (job.kind === 'disable') {
+    return '<div class="dns-check-line ok"><span class="mk">✓</span><span>DNS сервера выключен — сервер снова ходит в DNS хостера.</span></div>';
+  }
+  // apply / verify
+  let h = '';
+  if (job.kind === 'apply') {
+    h += '<div class="dns-check-line ok"><span class="mk">✓</span><span>Готово: сервер резолвит через выбранный DNS.</span></div>';
+  }
+  h += _sdnsProbeHtml('DNS сервера', r.direct);
+  if (r.system_egress_ip) {
+    h += `<div class="dns-check-sub"><span>Система резолвит через</span> ${escHtml(r.system_egress_ip)}` +
+         (r.system_egress_org ? ` — ${escHtml(r.system_egress_org)}` : '') + '</div>';
+  }
+  if (r.leak) {
+    h += '<div class="dns-check-line warn"><span class="mk">⚠</span><span class="st">Система резолвит не через тот же DNS — часть запросов идёт мимо.</span></div>';
+  }
+  if (r.extra_dns && r.extra_dns.length) {
+    h += '<div class="dns-check-line warn"><span class="mk">⚠</span><span class="st">Кроме 127.0.0.2 у системы есть ещё DNS — при сбое запросы уйдут туда:</span> ' +
+         escHtml(r.extra_dns.join(', ')) + '</div>';
+  }
+  return h;
+}
+
+function _sdnsErrorHtml(msg) {
+  const lines = String(msg || '').split('\n');
+  const head = lines.shift();
+  let h = `<div class="dns-check-line bad"><span class="mk">✗</span><span class="st">${escHtml(head)}</span></div>`;
+  const tail = lines.join('\n').trim();
+  if (tail) {
+    h += `<details class="dns-check-sub"><summary>Подробности</summary>` +
+         `<pre style="white-space:pre-wrap;margin:4px 0 0;">${escHtml(tail)}</pre></details>`;
+  }
+  return h;
+}
+
+function _sdnsRenderJob(job) {
+  const out = document.getElementById('sdnsOut');
+  out.classList.remove('hidden');
+  let h = (job.steps || []).map((s, i, a) => {
+    const last = i === a.length - 1 && job.state === 'running';
+    return `<div class="dns-check-line step"><span class="mk">${last ? '…' : '·'}</span><span>${escHtml(s)}</span></div>`;
+  }).join('');
+  if (job.state === 'done') h += _sdnsResultHtml(job);
+  if (job.state === 'error') h += _sdnsErrorHtml(job.error);
+  out.innerHTML = h;
+}
+
+async function _sdnsPoll() {
+  if (_sdnsPolling) return;
+  _sdnsPolling = true;
+  _sdnsDirty();
+  document.getElementById('sdnsCheckBtn').disabled = true;
+  let misses = 0, job = null;
+  try {
+    // Включение перезапускает XRay, а панель может стоять за его фоллбеком —
+    // пара запросов подряд тогда падает. Терпим до ~40 с.
+    while (true) {
+      try {
+        const r = await fetch(API + '/api/server-dns/job');
+        const j = await r.json();
+        misses = 0;
+        job = j.job;
+        if (job) _sdnsRenderJob(job);
+        if (j.state) _sdnsApplyHeader(j.state);
+        if (!job || job.state !== 'running') break;
+      } catch (_) {
+        if (++misses > 50) break;
+      }
+      await new Promise(res => setTimeout(res, 800));
+    }
+  } finally {
+    _sdnsPolling = false;
+    document.getElementById('sdnsCheckBtn').disabled = false;
+  }
+  if (job && job.kind !== 'check' && job.kind !== 'verify') {
+    try { await _sdnsLoad(job.state === 'done'); } catch (_) {}
+    try { refreshAuditStrip(); } catch (_) {}
+  }
+  _sdnsDirty();
+}
+
+async function checkServerDns() {
+  const f = _sdnsForm(), s = _sdnsSaved();
+  let url = '/api/server-dns/check', body = {main: f.main, fallback: f.fallback};
+  // Включён и не трогали — проверяем живой: и dnsproxy, и путь через систему.
+  if (s.enabled && f.enabled && f.main === s.main && f.fallback === s.fallback) {
+    url = '/api/server-dns/verify'; body = {};
+  } else if (!f.main) {
+    toast('Сначала вставьте адрес DNS');
+    return;
+  }
+  try {
+    const r = await fetch(API + url, {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
+    });
+    const j = await r.json();
+    if (!r.ok || j.error) { toast(j.error || 'Не запустилось'); return; }
+    if (j.job) _sdnsRenderJob(j.job);
+    _sdnsPoll();
+  } catch (e) { toast('Сеть: ' + e.message); }
+}
+
+async function applyServerDns() {
+  const f = _sdnsForm();
+  try {
+    const r = await fetch(API + '/api/server-dns/apply', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(f),
+    });
+    const j = await r.json();
+    if (!r.ok || j.error) { toast(j.error || 'Не запустилось'); return; }
+    if (!j.job) { await _sdnsLoad(true); return; }
+    _sdnsRenderJob(j.job);
+    _sdnsPoll();
+  } catch (e) { toast('Сеть: ' + e.message); }
 }

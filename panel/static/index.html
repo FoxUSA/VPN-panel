@@ -1811,6 +1811,11 @@ body::before {
 /* Settings hub modal */
 .settings-hub-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: 1fr; gap: 8px; max-height: 60vh; overflow-y: auto; padding-right: 4px; }
 @media (max-width: 640px) { .settings-hub-list { grid-template-columns: 1fr; grid-auto-rows: auto; } }
+/* Низ окна бэкапа: слева разовый бэкап и «в меню ⚙», справа закрыть/сохранить. */
+.modal-actions.bk-foot { align-items: center; }
+.bk-foot-left { display: flex; align-items: center; gap: 8px; margin-right: auto; min-width: 0; }
+.bk-run-status { color: var(--text3); font-size: 12px; }
+.bk-fav.is-fav { color: var(--accent); border-color: var(--accent); }
 /* Окна «Настройка бэкапа» и «Движок Mihomo» на ПК — шире и по группам.
    До 900px остаются как были: столбиком. */
 @media (min-width: 900px) {
@@ -1818,10 +1823,14 @@ body::before {
   .bk-modal .bk-status { display: flex; align-items: stretch; gap: 12px; margin-bottom: 22px; }
   .bk-modal .bk-stats { flex: 1; margin-bottom: 0 !important; flex-wrap: nowrap !important; }
   .bk-modal .bk-stats .stat-card { min-width: 0 !important; }
-  .bk-modal .bk-run { flex-direction: column; justify-content: center; align-items: stretch !important; margin-bottom: 0 !important; width: 220px; }
-  .bk-modal .bk-run #bkRunStatus { text-align: center; }
-  .bk-modal .bk-mid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 28px; }
+  .bk-modal .bk-mid { display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr); gap: 0 24px; align-items: stretch; }
   .bk-modal .bk-col { min-width: 0; }
+  .bk-modal .bk-col-right { display: flex; flex-direction: column; }
+  /* Список не задаёт высоту колонки (contain: size), а добирает остаток —
+     правая колонка заканчивается вровень с левой, без пустого поля под ней. */
+  .bk-modal .bk-col-right #bkList { flex: 1 1 auto; min-height: 190px; max-height: none !important; contain: size; margin-bottom: 18px; }
+  .bk-modal .bk-stats .stat-card { padding: 12px 16px; border-radius: 10px; }
+  .bk-modal .bk-stats .stat-card .label { margin-bottom: 4px; }
   .modal.mh-engine-modal { width: 900px; max-width: calc(100vw - 48px) !important; }
   .mh-engine-modal .mh-eng-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; margin-bottom: 12px; }
   .mh-engine-modal .mh-eng-col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
@@ -1875,6 +1884,17 @@ body::before {
   .modal.su-modal { width: calc(100vw - 24px); max-width: calc(100vw - 24px); }
   .su-grid-access, .su-grid-upd { grid-template-columns: 1fr; }
   .su-ip-add { flex-basis: 100%; }
+  /* Две плашки в ряд: во flex-строку они не влезали на пару пикселей и шли
+     по одной. Сетка делит ширину поровну, шрифт чуть меньше — влезает и
+     самый длинный адрес 255.255.255.255. */
+  .su-ip-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .su-ip-chip { justify-content: space-between; min-width: 0; font-size: 12px; padding: 4px 2px 4px 8px; }
+  .su-ip-empty { grid-column: 1 / -1; }
+}
+/* Совсем узкий экран (320px, iPhone SE): две колонки не вмещают 15 знаков
+   адреса — по одной в ряд. */
+@media (max-width: 360px) {
+  .su-ip-list { grid-template-columns: 1fr; }
 }
 .settings-hub-item { display: flex; align-items: flex-start; gap: 18px; padding: 12px 14px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; }
 .settings-hub-item .shi-body { flex: 1; min-width: 0; }
@@ -2047,8 +2067,15 @@ body::before {
 /* Backup modal — info block (multi-line, no jumble) */
 .bk-info-block { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; }
 .bk-info-row { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; padding: 3px 0; font-size: 13px; }
-.bk-info-row .bk-info-key { color: var(--text3); font-size: 12px; min-width: 170px; }
+.bk-info-row .bk-info-key { color: var(--text3); font-size: 12px; min-width: 120px; }
+.bk-chips { display: flex; flex-wrap: wrap; gap: 4px; flex: 1 1 0; min-width: 0; }
+.bk-chips code { font-size: 11.5px; padding: 1px 6px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg2); color: var(--text2) !important; line-height: 1.6; }
+#backupPathsInfo { line-height: 1.5 !important; }
 .bk-info-row code { color: var(--text); }
+/* Строка списка архивов: имени не меньше 200px — где кнопкам рядом тесно (телефон),
+   они уходят на вторую строку, а не сжимают имя в точку. */
+.bk-item { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+.bk-item-name { flex: 1 1 200px; min-width: 0; }
 .bk-info-line { display: flex; align-items: baseline; gap: 8px; padding: 2px 0 2px 14px; font-size: 12.5px; }
 .bk-info-bullet { color: var(--green); font-size: 11px; min-width: 12px; flex-shrink: 0; }
 /* Длинные пути (/etc/systemd/system/…) должны переноситься, а не распирать модалку по горизонтали */
@@ -2504,6 +2531,8 @@ code.tpl-chip, .tpl-info-head code { font-family: 'JetBrains Mono', monospace; }
     padding: 12px 20px;
   }
   .modal-actions .btn { flex: 1 1 auto; justify-content: center; }
+  .modal-actions.bk-foot .bk-foot-left { flex: 1 1 100%; margin-right: 0; flex-wrap: wrap; }
+  .modal-actions.bk-foot .bk-run-status { flex: 1 1 100%; text-align: center; }
   .truth-row { grid-template-columns: 1fr !important; gap: 4px !important; }
   .truth-row .tk { font-size: 12px; }
   .truth-iface-row { flex-wrap: wrap; }
@@ -2588,6 +2617,7 @@ code.tpl-chip, .tpl-info-head code { font-family: 'JetBrains Mono', monospace; }
       <button class="btn btn-sm btn-ghost" onclick="doLogout()">Выйти</button>
       <button id="depsAlertBtn" class="btn btn-sm cog-btn hidden deps-alert" onclick="openDepsModal()" title="Не все зависимости панели готовы — нажми для деталей">⚠</button>
       <button id="langToggleBtn" class="btn btn-sm btn-ghost cog-btn lang-toggle" title="Language / Язык" aria-label="Language">🌐 <span class="lang-label">RU</span></button>
+      <button id="srvDnsBtn" class="btn btn-sm btn-ghost cog-btn srv-dns-btn hidden" onclick="openServerDnsModal()" title="DNS сервера"><span class="srv-dns-lbl">DNS</span></button>
       <div style="position:relative;">
         <button class="btn btn-sm btn-ghost cog-btn" onclick="toggleSettingsMenu(event)" title="Настройки">⚙</button>
         <div id="settingsMenu" class="settings-menu hidden">
@@ -3510,8 +3540,9 @@ code.tpl-chip, .tpl-info-head code { font-family: 'JetBrains Mono', monospace; }
   <div class="modal modal-wide bk-modal">
     <h2>Настройка бэкапа</h2>
 
-    <!-- ПК: сверху состояние и запуск, посередине «что сохраняется» | расписание
-         и ограничение, снизу список архивов. Телефон — всё столбиком, как было. -->
+    <!-- ПК: сверху три компактные плашки состояния, ниже две колонки:
+         «что сохраняется» | расписание, ограничение и список архивов (список
+         добирает высоту левой колонки и прокручивается внутри). Телефон — столбиком. -->
     <!-- Block 1: status + run -->
     <div class="bk-status">
     <div class="bk-stats" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px;">
@@ -3530,10 +3561,6 @@ code.tpl-chip, .tpl-info-head code { font-family: 'JetBrains Mono', monospace; }
         <div class="value" id="bkNextRun" style="font-size:14px;">—</div>
       </div>
     </div>
-    <div class="bk-run" style="display:flex;gap:10px;align-items:center;margin-bottom:22px;">
-      <button class="btn btn-sm btn-success" id="bkRunBtn" onclick="backupRunNow()">Сделать бэкап сейчас</button>
-      <span id="bkRunStatus" style="color:var(--text3);font-size:12px;"></span>
-    </div>
     </div>
 
     <div class="bk-mid">
@@ -3544,7 +3571,7 @@ code.tpl-chip, .tpl-info-head code { font-family: 'JetBrains Mono', monospace; }
     </div>
     </div>
 
-    <div class="bk-col">
+    <div class="bk-col bk-col-right">
     <!-- Block 2: schedule -->
     <h3 style="font-size:13px;color:var(--text2);margin:6px 0 12px 0;text-transform:uppercase;letter-spacing:0.05em;">Расписание</h3>
     <label style="display:flex;align-items:center;gap:8px;margin-bottom:12px;cursor:pointer;">
@@ -3575,21 +3602,118 @@ code.tpl-chip, .tpl-info-head code { font-family: 'JetBrains Mono', monospace; }
         <span>МБ в папке</span>
       </label>
     </div>
-    </div>
-    </div>
 
-    <!-- Block 4: list -->
+    <!-- Block 4: list — на ПК занимает остаток правой колонки и крутится внутри -->
     <h3 style="font-size:13px;color:var(--text2);margin:6px 0 12px 0;text-transform:uppercase;letter-spacing:0.05em;">Бэкапы</h3>
     <div id="bkList" style="max-height:280px;overflow-y:auto;background:var(--bg);border:1px solid var(--border);border-radius:6px;">
       <div style="padding:14px;color:var(--text3);font-size:13px;text-align:center;">…</div>
     </div>
+    </div>
+    </div>
 
-    <div class="modal-actions" style="margin-top:18px;">
+    <div class="modal-actions bk-foot" style="margin-top:18px;">
+      <div class="bk-foot-left">
+        <button class="btn btn-sm btn-ghost" id="bkRunBtn" onclick="backupRunNow()">Сделать бэкап сейчас</button>
+        <button class="btn btn-sm btn-ghost bk-fav" id="bkFavBtn" onclick="toggleBackupQuickFav()" title="Пункт «Сделать бэкап» в меню шестерёнки — бэкап в один клик">☆ В меню ⚙</button>
+        <span id="bkRunStatus" class="bk-run-status"></span>
+      </div>
       <button class="btn btn-sm btn-ghost" onclick="closeModal('backupModal')">Закрыть</button>
       <button class="btn btn-sm btn-success" onclick="backupSaveSchedule()">Сохранить настройки</button>
     </div>
   </div>
 </div>
+
+<!-- DNS сервера -->
+<div id="serverDnsModal" class="modal-overlay hidden">
+  <div class="modal sdns-modal">
+    <div class="sdns-head">
+      <h2 style="margin:0;">DNS сервера</h2>
+      <label class="switch-row sdns-on-row" title="Включить свой DNS для всего сервера">
+        <span class="switch switch-tinted">
+          <input type="checkbox" id="sdnsEnabled" onchange="_sdnsDirty()">
+          <span class="switch-slider"></span>
+        </span>
+        <span class="switch-row-lbl">Свой DNS</span>
+      </label>
+    </div>
+
+    <div class="dns-info">
+      Через этот резолвер сервер резолвит <b>всё, что через него идёт:</b> VPN-трафик XRay (VLESS, XDNS), Hysteria, mtg и саму панель. Пока он выключен, это DNS хостера, и хостер видит все домены. DNS в конфигах клиентов — отдельно, в Global DNS у XRay.
+    </div>
+
+    <div id="sdnsStatus" class="sdns-status"></div>
+
+    <div class="sdns-grid">
+      <div class="dns-field">
+        <label class="dns-label" for="sdnsMain">Основной DNS — вставьте адрес в любом виде</label>
+        <div id="sdnsChips" class="sdns-chips"></div>
+        <textarea id="sdnsMain" class="sdns-input" rows="2" spellcheck="false"
+                  placeholder="https://dns.adguard-dns.com/dns-query · tls://dns.google · 94.140.14.14 · sdns://… · ID NextDNS"
+                  oninput="_sdnsOnInput()"></textarea>
+        <div id="sdnsMainParsed" class="sdns-parsed"></div>
+      </div>
+      <div class="dns-field">
+        <label class="dns-label" for="sdnsFb">Запасной DNS (необязательно) — спрашивается, только если основной не ответил</label>
+        <textarea id="sdnsFb" class="sdns-input" rows="2" spellcheck="false"
+                  placeholder="Например, другой провайдер: tls://dns.quad9.net"
+                  oninput="_sdnsOnInput()"></textarea>
+        <div id="sdnsFbParsed" class="sdns-parsed"></div>
+      </div>
+    </div>
+
+    <label class="switch-row sdns-btn-row" title="Кнопка DNS слева от шестерёнки: открывает это окно, краснеет, если DNS перестал отвечать">
+      <span class="switch switch-tinted">
+        <input type="checkbox" id="sdnsShowBtn" onchange="_sdnsSaveButton()">
+        <span class="switch-slider"></span>
+      </span>
+      <span class="switch-row-lbl">Кнопка «DNS» в шапке панели (покраснеет, если DNS перестанет отвечать)</span>
+    </label>
+
+    <div id="sdnsOut" class="dns-check hidden"></div>
+
+    <div class="modal-actions sdns-foot">
+      <button class="btn btn-sm btn-ghost" id="sdnsCheckBtn" onclick="checkServerDns()" title="Пробный запуск с этим DNS на сервере: отвечает ли, за сколько, режет ли рекламу, кто резолвит на самом деле">Проверить</button>
+      <span style="flex:1"></span>
+      <button class="btn btn-sm btn-ghost" onclick="closeModal('serverDnsModal')">Закрыть</button>
+      <button class="btn btn-sm btn-success" id="sdnsApplyBtn" onclick="applyServerDns()" disabled>Применить</button>
+    </div>
+  </div>
+</div>
+<style>
+.sdns-modal { width: 760px; max-width: calc(100vw - 48px); }
+.sdns-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
+.sdns-on-row, .sdns-btn-row { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+.sdns-on-row .switch-row-lbl { font-size: 13px; color: var(--text); }
+.sdns-btn-row { margin-top: 14px; }
+.sdns-btn-row .switch-row-lbl { font-size: 12px; color: var(--text2); }
+.sdns-status { font-size: 12px; color: var(--text2); line-height: 1.5; padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); margin-bottom: 14px; }
+.sdns-status b { color: var(--text); }
+.sdns-status.ok { border-color: rgba(74, 222, 128, .35); }
+.sdns-status.bad { border-color: rgba(248, 113, 113, .5); color: #fca5a5; }
+.sdns-grid { display: flex; flex-direction: column; gap: 14px; }
+.sdns-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 2px; }
+.sdns-chip { font-size: 11px; padding: 3px 9px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg); color: var(--text2); cursor: pointer; }
+.sdns-chip:hover { border-color: var(--accent); color: var(--text); }
+.sdns-modal .sdns-input { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font-size: 13px; font-family: var(--mono, monospace); resize: vertical; min-height: 38px; }
+.sdns-modal .sdns-input::placeholder { color: var(--text3); font-family: inherit; }
+.sdns-parsed { display: flex; flex-direction: column; gap: 2px; font-size: 12px; min-height: 0; }
+.sdns-parsed .ln { color: var(--text2); overflow-wrap: anywhere; }
+.sdns-parsed .ln .mk { font-weight: 700; margin-right: 6px; color: var(--green, #4ade80); }
+.sdns-parsed .ln.bad, .sdns-parsed .ln.bad .mk { color: var(--red, #f87171); }
+.sdns-parsed .ln .up { color: var(--text3); font-family: var(--mono, monospace); font-size: 11px; margin-left: 6px; }
+.sdns-parsed .warn { color: var(--orange, #fbbf24); padding-left: 18px; }
+.sdns-foot { align-items: center; }
+.dns-check-line.warn .mk, .dns-check-line.warn .st { color: var(--orange, #fbbf24); }
+.dns-check-line.step { color: var(--text3); }
+/* Высота — как у соседних .cog-btn (их задаёт значок 22px): строка той же высоты, текст мелкий. */
+.srv-dns-btn .srv-dns-lbl { display: inline-block; font-size: 12px; font-weight: 700; letter-spacing: .04em; line-height: 22px; vertical-align: top; }
+/* Включён и отвечает — надпись нашим салатовым, как акцентный текст панели. */
+.srv-dns-btn:not(.is-bad) { color: var(--green); }
+.srv-dns-btn.is-bad { background: rgba(248, 113, 113, .16); border-color: rgba(248, 113, 113, .45); color: #fca5a5; }
+@media (max-width: 640px) {
+  .sdns-modal { width: calc(100vw - 24px); max-width: calc(100vw - 24px); }
+}
+</style>
 
 <!-- Backup Restore Confirm Modal -->
 <div id="backupRestoreModal" class="modal-overlay hidden">
@@ -3917,10 +4041,17 @@ code.tpl-chip, .tpl-info-head code { font-family: 'JetBrains Mono', monospace; }
 
     <div id="dnsGlobalInfo" class="dns-info" style="display:none;">
       Эти настройки применяются <b>по умолчанию ко всем новым пользователям</b>. Существующих клиентов они не меняют — для этого включите «Применить ко всем».
+      <span id="dnsGlobalSrvOwn">
       <br><br>
       <b>Этот резолвер использует и сам сервер.</b>
       <br>
       Домены, уходящие в VPN, резолвит XRay, а не устройство. Сохранение перепишет секцию dns в конфиге XRay и перезапустит его — активные соединения оборвутся на пару секунд.
+      </span>
+      <span id="dnsGlobalSrvLink" style="display:none;">
+      <br><br>
+      <b>Сам сервер резолвит через «DNS сервера».</b> Здесь — только DNS для конфигов клиентов.
+      <a href="#" onclick="closeModal('dnsModal'); openServerDnsModal(); return false;">Открыть DNS сервера →</a>
+      </span>
     </div>
 
     <div id="dnsClientInfo" class="dns-info" style="display:none;">
