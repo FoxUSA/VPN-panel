@@ -2,6 +2,10 @@
    regenerate from source extraction. Loaded before i18n.js. */
 window.I18N_EN = {
   exact: {
+  "Если свой DNS не отвечает — временно перейти на DNS хостера и вернуться, когда заработает": "If your own DNS stops answering — temporarily switch to the hosting provider’s DNS and switch back once it works again",
+  "Без DNS у клиентов VPN пропадает интернет. Пока свой DNS лежит, домены снова видит хостер": "Without DNS, VPN clients lose internet access. While your own DNS is down, the hosting provider sees the domains again",
+  "Свой DNS не отвечает — сервер временно на DNS хостера": "Your own DNS is not answering — the server is temporarily on the hosting provider’s DNS",
+  "вернётся сам, когда свой DNS заработает": "switches back by itself once your own DNS works again",
   "Кроме 127.0.0.2 у системы есть ещё DNS — при сбое запросы уйдут туда:": "Besides 127.0.0.2 the system has other DNS servers \u2014 on a failure queries will go there:",
   "dnsproxy не запущен — откройте «DNS сервера» и нажмите «Применить»": "dnsproxy is not running \u2014 open \u201cServer DNS\u201d and press \u201cApply\u201d",
   "DNS сервера": "Server DNS",
@@ -4180,6 +4184,7 @@ window.I18N_EN = {
   "Скопировано": "Copied"
   },
   patterns: [
+    [new RegExp("^\u0441 (\\d{2}\\.\\d{2}\\.\\d{4} \\d{2}:\\d{2}(?::\\d{2})?)$"), "since $1"],
     [new RegExp("^проверено (.+)$"), "checked $1"],
     [new RegExp("^ответ (\\d+) мс, проверено (.+)$"), "answer $1 ms, checked $2"],
     [new RegExp("^отвечает за (\\d+) мс$"), "answers in $1 ms"],

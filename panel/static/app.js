@@ -13553,6 +13553,14 @@ function _sdnsRenderStatus() {
   const who = (_sdns.main || []).filter(e => e.ok).map(e => e.provider || e.host).filter(Boolean);
   const whoTxt = [...new Set(who)].join(', ');
   const when = st.checked_at ? _fmtServerTs(st.checked_at, true) : '';
+  if (st.failover_since) {
+    el.classList.add('bad');
+    el.innerHTML = '<b>Свой DNS не отвечает — сервер временно на DNS хостера</b>' +
+                   (st.error ? ` — <span>${escHtml(st.error)}</span>` : '') +
+                   ` · <span>с ${_fmtServerTs(st.failover_since, true)}</span>` +
+                   ' · <span>вернётся сам, когда свой DNS заработает</span>';
+    return;
+  }
   if (st.ok === false) {
     el.classList.add('bad');
     el.innerHTML = `<b>DNS сервера не отвечает</b> — <span>${escHtml(st.error || '')}</span>` +
@@ -13572,7 +13580,9 @@ function _sdnsApplyHeader(state) {
   b.classList.toggle('hidden', !(state.enabled && state.show_button));
   const bad = state.enabled && state.ok === false;
   b.classList.toggle('is-bad', bad);
-  b.title = bad ? ('DNS сервера не отвечает: ' + (state.error || '')) : 'DNS сервера';
+  b.title = state.enabled && state.failover_since
+    ? 'Свой DNS не отвечает — сервер временно на DNS хостера'
+    : (bad ? ('DNS сервера не отвечает: ' + (state.error || '')) : 'DNS сервера');
 }
 
 async function _sdnsHeaderRefresh() {
@@ -13658,6 +13668,7 @@ async function _sdnsLoad(fillInputs) {
     document.getElementById('sdnsMain').value = j.settings.main || '';
     document.getElementById('sdnsFb').value = j.settings.fallback || '';
     document.getElementById('sdnsShowBtn').checked = j.settings.show_button !== false;
+    document.getElementById('sdnsAutoFo').checked = j.settings.auto_failover !== false;
     _sdnsParsed = {main: j.main || [], fallback: j.fallback || []};
     _sdnsRenderParsed();
     _sdnsRenderChips();
@@ -13682,16 +13693,20 @@ async function openServerDnsModal() {
   }
 }
 
+// Тумблеры, которые систему не трогают, сохраняются сразу: кнопка в шапке и авто-откат.
 async function _sdnsSaveButton() {
-  const on = document.getElementById('sdnsShowBtn').checked;
+  const body = {
+    show_button: document.getElementById('sdnsShowBtn').checked,
+    auto_failover: document.getElementById('sdnsAutoFo').checked,
+  };
   try {
     const r = await fetch(API + '/api/server-dns/button', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({show_button: on}),
+      body: JSON.stringify(body),
     });
     const j = await r.json();
     if (j.state) _sdnsApplyHeader(j.state);
-    if (_sdns && _sdns.settings) _sdns.settings.show_button = on;
+    if (_sdns && _sdns.settings) Object.assign(_sdns.settings, body);
   } catch (_) { toast('Сеть: не сохранено'); }
 }
 

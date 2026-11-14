@@ -95,6 +95,8 @@ DEFAULTS = {
     'show_button': True,   # кнопка DNS в шапке
     'sys_upstream': [],    # DNS хостера, снятый ДО переключения: бутстрап и откат
     'mode': '',            # 'resolved' | 'resolvconf' — как переключена система
+    'auto_failover': True, # наш DNS лёг — временно отдать систему DNS хостера
+    'failover_since': 0,   # >0 — сейчас в таком откате (unix-время начала)
 }
 
 # Готовые варианты — кнопки над полем. Только крупные, как в клиентской модалке.
@@ -1145,8 +1147,8 @@ def _job_apply(main_text, fb_text):
                 _sh(['systemctl', 'disable', '--now', UNIT_NAME], 20)
             raise RuntimeError('после переключения система не резолвит (%s). Возвращено как было.' % err)
         _save({'enabled': True, 'main': main_text.strip(), 'fallback': fb_text.strip(),
-               'sys_upstream': sysup, 'mode': mode})
-        _health.update(ok=True, ts=int(time.time()), error='', fails=0)
+               'sys_upstream': sysup, 'mode': mode, 'failover_since': 0})
+        _health.update(ok=True, ts=int(time.time()), error='', fails=0, oks=0)
         step('Перевожу XRay на DNS сервера…')
         try:
             apply_xray_dns()
@@ -1167,8 +1169,8 @@ def _job_disable():
         _restore_system(cur.get('mode') or '')
         step('Останавливаю dnsproxy…')
         _sh(['systemctl', 'disable', '--now', UNIT_NAME], 20)
-        _save({'enabled': False, 'mode': ''})
-        _health.update(ok=None, ts=0, error='', fails=0)
+        _save({'enabled': False, 'mode': '', 'failover_since': 0})
+        _health.update(ok=None, ts=0, error='', fails=0, oks=0)
         step('Возвращаю XRay его DNS из Global…')
         try:
             apply_xray_dns()
@@ -1203,57 +1205,101 @@ def _verify_report():
 # Сторож
 # =============================================================================
 
-def _health_tick():
-    s = settings()
-    if not s.get('enabled'):
-        _health.update(ok=None, ts=0, error='', fails=0)
-        return
-    if _job.get('state') == 'running':
-        return     # включение/выключение идёт прямо сейчас — не мешать ему
-    # Система ушла с нашего DNS (DHCP перезаписал resolv.conf, кто-то удалил drop-in).
-    # Возвращаем ТОЛЬКО если dnsproxy отвечает: после восстановления бэкапа на новом
-    # сервере «включено» приезжает в server.json, а dnsproxy там ещё нет — переключение
-    # оставило бы сервер вовсе без DNS.
-    if not system_points_to_us(s.get('mode')):
-        try:
-            rc, ips, _t, _ms = query(LISTEN_IP, 53, PROBE_OK, timeout=2)
-            alive = not rc and bool(ips)
-        except Exception:
-            alive = False
-        if not alive:
-            if engine_version() and os.path.exists(CONF_FILE):
-                _sh(['systemctl', 'enable', '--now', UNIT_NAME], 15)
-            _health.update(ok=False, ts=int(time.time()),
-                           error='dnsproxy не запущен — откройте «DNS сервера» и нажмите «Применить»')
-            return
-        try:
-            with _lock:
-                mode = _switch_system()
-            if mode != s.get('mode'):
-                _save({'mode': mode})
-            audit('warn', 'DNS сервера: система ушла с dnsproxy — возвращена')
-        except Exception as e:
-            _health.update(ok=False, ts=int(time.time()), error='система не переключена: %s' % e)
-            return
+FAIL_TO_RED = 2        # промахов подряд до красной кнопки (один — сеть могла мигнуть)
+FAIL_TO_FAILOVER = 3   # промахов подряд до авто-отката на DNS хостера
+OK_TO_RETURN = 2       # удачных ответов подряд, чтобы вернуться обратно
+HEALTH_FAST = 10       # шаг сторожа, пока что-то не так (обычный — HEALTH_EVERY)
+
+
+def _probe_dnsproxy():
+    """(ok, мс, причина) — отвечает ли наш dnsproxy на 127.0.0.2 по-настоящему."""
     try:
         rc, ips, _t, ms = query(LISTEN_IP, 53, PROBE_OK)
         if rc or not ips:
-            raise RuntimeError('сервер ответил ошибкой' if rc else 'пустой ответ')
-        _health.update(ok=True, ts=int(time.time()), error='', ms=ms, fails=0)
+            return False, 0, 'сервер ответил ошибкой' if rc else 'пустой ответ'
+        return True, ms, ''
     except Exception as e:
-        _health['fails'] = _health.get('fails', 0) + 1
-        _health['ts'] = int(time.time())
-        _health['error'] = _human(e)
-        if not engine_version():
-            _health['error'] = 'dnsproxy не найден на сервере'
-        # Один промах — не повод краснеть: сеть могла мигнуть.
-        if _health['fails'] >= 2:
-            if _health.get('ok') is not False:
-                audit('warn', 'DNS сервера не отвечает: %s' % _health['error'])
-            _health['ok'] = False
-            rc2, out = _sh(['systemctl', 'is-active', UNIT_NAME], 5)
+        return False, 0, _human(e)
+
+
+def _health_tick():
+    s = settings()
+    if not s.get('enabled'):
+        _health.update(ok=None, ts=0, error='', fails=0, oks=0)
+        return
+    if _job.get('state') == 'running':
+        return     # включение/выключение идёт прямо сейчас — не мешать ему
+    now = int(time.time())
+    ok, ms, err = _probe_dnsproxy()
+    if not ok and not engine_version():
+        err = 'dnsproxy не найден на сервере'
+
+    if not system_points_to_us(s.get('mode')):
+        # Система сейчас на DNS хостера: авто-откат после сбоя, восстановленный на
+        # новом сервере бэкап (dnsproxy там ещё нет), DHCP перезаписал resolv.conf.
+        # Возвращаем ТОЛЬКО когда dnsproxy реально отвечает — иначе сервер остался бы
+        # вовсе без DNS. После отката — два удачных ответа подряд, чтобы не качелить.
+        if ok:
+            _health['oks'] = _health.get('oks', 0) + 1
+            need = OK_TO_RETURN if s.get('failover_since') else 1
+            if _health['oks'] < need:
+                _health.update(ok=False, ts=now)
+                return
+            was_fo = bool(s.get('failover_since'))
+            try:
+                with _lock:
+                    mode = _switch_system()
+                good, e2 = _system_resolves()
+                if not good:
+                    _restore_system(mode)
+                    raise RuntimeError('после переключения система не резолвит (%s)' % e2)
+                _save({'mode': mode, 'failover_since': 0})
+                _health.update(ok=True, ts=now, error='', ms=ms, fails=0, oks=0)
+                audit('info' if was_fo else 'warn',
+                      'DNS сервера снова отвечает — система возвращена на него' if was_fo
+                      else 'DNS сервера: система ушла с dnsproxy — возвращена')
+            except Exception as e:
+                _health.update(ok=False, ts=now, error='система не переключена: %s' % e)
+            return
+        _health['oks'] = 0
+        if engine_version() and os.path.exists(CONF_FILE):
+            _rc, out = _sh(['systemctl', 'is-active', UNIT_NAME], 5)
             if out.strip() != 'active':
-                _sh(['systemctl', 'start', UNIT_NAME], 15)
+                _sh(['systemctl', 'enable', '--now', UNIT_NAME], 15)
+        if s.get('failover_since'):
+            _health.update(ok=False, ts=now, error=err)
+        else:
+            _health.update(ok=False, ts=now,
+                           error='dnsproxy не запущен — откройте «DNS сервера» и нажмите «Применить»')
+        return
+
+    # Система на dnsproxy.
+    _health['oks'] = 0
+    if ok:
+        _health.update(ok=True, ts=now, error='', ms=ms, fails=0)
+        return
+    _health['fails'] = _health.get('fails', 0) + 1
+    _health.update(ts=now, error=err)
+    if _health['fails'] >= FAIL_TO_RED:
+        if _health.get('ok') is not False:
+            audit('warn', 'DNS сервера не отвечает: %s' % err)
+        _health['ok'] = False
+        if _health['fails'] == FAIL_TO_RED:
+            # Завис или упал — перезапуск; не поможет, если лёг сам провайдер.
+            _sh(['systemctl', 'restart', UNIT_NAME], 20)
+    if _health['fails'] >= FAIL_TO_FAILOVER and s.get('auto_failover', True):
+        # Свой DNS лёг всерьёз — без DNS у клиентов VPN пропал бы интернет. Временно
+        # отдаём систему DNS хостера; настройка остаётся включённой, и как только
+        # dnsproxy снова ответит, сторож вернёт систему сам (ветка выше).
+        try:
+            with _lock:
+                _restore_system(s.get('mode') or '')
+            _save({'failover_since': now})
+            good, e2 = _system_resolves()
+            audit('warn', 'DNS сервера не отвечает (%s) — система временно на DNS хостера%s'
+                  % (err, '' if good else '; DNS хостера тоже не отвечает: %s' % e2))
+        except Exception as e:
+            audit('warn', 'DNS сервера: не удалось перейти на DNS хостера: %s' % e)
 
 
 def _health_loop():
@@ -1263,7 +1309,10 @@ def _health_loop():
             _health_tick()
         except Exception:
             pass
-        time.sleep(HEALTH_EVERY)
+        # Пока что-то не так — чаще: откат через ~20 с после второго промаха,
+        # возврат через ~20 с после того, как DNS ожил.
+        trouble = _health.get('fails', 0) > 0 or _health.get('ok') is False
+        time.sleep(HEALTH_FAST if trouble else HEALTH_EVERY)
 
 
 def start_background():
@@ -1282,7 +1331,9 @@ def _state():
     s = settings()
     return {'enabled': bool(s['enabled']), 'show_button': bool(s['show_button']),
             'ok': _health.get('ok'), 'error': _health.get('error') or '',
-            'checked_at': _health.get('ts') or 0, 'ms': _health.get('ms') or 0}
+            'checked_at': _health.get('ts') or 0, 'ms': _health.get('ms') or 0,
+            'auto_failover': bool(s.get('auto_failover', True)),
+            'failover_since': int(s.get('failover_since') or 0) if s['enabled'] else 0}
 
 
 @bp.route('/api/server-dns/state')
@@ -1296,7 +1347,7 @@ def api_state():
 def api_get():
     s = settings()
     return jsonify({
-        'settings': {k: s[k] for k in ('enabled', 'main', 'fallback', 'show_button', 'mode')},
+        'settings': {k: s[k] for k in ('enabled', 'main', 'fallback', 'show_button', 'mode', 'auto_failover')},
         'state': _state(),
         'main': [_public(e) for e in parse_many(s['main'])],
         'fallback': [_public(e) for e in parse_many(s['fallback'])],
@@ -1358,8 +1409,11 @@ def api_apply():
 @bp.route('/api/server-dns/button', methods=['POST'])
 @_auth
 def api_button():
+    """Тумблеры окна, которые систему не трогают: кнопка в шапке и авто-откат."""
     d = request.get_json(silent=True) or {}
-    _save({'show_button': bool(d.get('show_button'))})
+    patch = {k: bool(d[k]) for k in ('show_button', 'auto_failover') if k in d}
+    if patch:
+        _save(patch)
     return jsonify({'ok': True, 'state': _state()})
 
 
