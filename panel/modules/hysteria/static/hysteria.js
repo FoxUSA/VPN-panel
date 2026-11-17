@@ -457,7 +457,8 @@
             '<div class="peer-name-badge">' + badge + '</div>' +
           '</div>' +
           '<div class="peer-actions">' + applyBtn +
-            '<button class="btn btn-sm btn-ghost" onclick="hyGlobal(\'logs\')">Логи</button>' +
+            ico('logsBtnHtml', ["hyGlobal('logs')"],
+                '<button class="btn btn-sm btn-ghost" onclick="hyGlobal(\'logs\')">Логи</button>') +
             '<button class="btn-act" onclick="hyGlobal(\'refresh\')" title="Перекачать списки правил с источников и применить заново. Это не перезапуск сервиса — меняется только содержимое правил." aria-label="Перекачать списки правил">' +
               '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/></svg>' +
             '</button>' +
@@ -720,7 +721,8 @@
                 '\')" title="Применить изменения правил">Применить</button>'
               : '') +
             '<button class="btn btn-sm btn-ghost" onclick="' + call('config') + '">Конфиг</button>' +
-            '<button class="btn btn-sm btn-ghost" onclick="' + call('logs') + '">Логи</button>' +
+            ico('logsBtnHtml', [call('logs')],
+                '<button class="btn btn-sm btn-ghost" onclick="' + call('logs') + '">Логи</button>') +
             // DNS и фильтрация по IP — общие модалки панели, им передаём kind.
             ico('dnsCfgBtnHtml', ["hyAct('dns','" + id + "')",
                                   ico('_dnsIconState', [c], ''),
@@ -2008,6 +2010,16 @@
       if (b && b.act) b.act(ov);
       if (b && !b.keepOpen) ov.remove();
     });
+    // «Сохранить/Применить» горит только при правках (dirtyTrack в app.js). После
+    // текущего кода: вызывающий ещё может дописать значения в поля.
+    setTimeout(function () {
+      if (typeof window.dirtyTrack !== 'function') return;
+      (buttons || []).forEach(function (b, i) {
+        if (/^(Сохранить|Применить)/.test(b.text || '')) {
+          window.dirtyTrack(ov, ov.querySelector('[data-btn="' + i + '"]'));
+        }
+      });
+    }, 0);
     return ov;
   }
 

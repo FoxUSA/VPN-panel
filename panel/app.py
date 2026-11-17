@@ -9577,7 +9577,19 @@ def api_probe_ping():
         },
         'hysteria': hy,
         'tgweb': tg,
+        # DNS сервера — мониторинг опрашивает его состояние через /api/probe/dns.
+        'dns': (server_dns.probe_info() if server_dns
+                else {'supported': False, 'enabled': False, 'port': 0}),
     })
+
+@app.route('/api/probe/dns')
+@probe_auth
+def api_probe_dns():
+    """Состояние DNS сервера для внешнего мониторинга (сторож панели проверяет его
+    раз в 30 с, здесь — последний итог)."""
+    if not server_dns:
+        return jsonify({'enabled': False, 'up': None})
+    return jsonify(server_dns.probe_state())
 
 @app.route('/api/probe/blob')
 @probe_auth
@@ -10965,7 +10977,12 @@ try:
         # Известные несовместимости формата, которые чинятся без участия
         # пользователя, — прогоняются по кандидату конфига до теста ядра.
         'patchers': [p for p in (getattr(xdns, 'patch_format', None),) if p],
+        # Полная база стран geoip.dat: настройки и коды из правил Hysteria.
+        'settings': SERVER_CFG,
+        'save_settings': _save_server_config,
+        'hysteria_config': os.path.join(DATA_DIR, 'hysteria', 'config.yaml'),
     })
+    xray_core_update.start_geoip_auto()
 except Exception as _xcu_err:
     xray_core_update = None
     print(f'[xray-update] отключён: {_xcu_err}', flush=True)
@@ -11411,6 +11428,24 @@ def _xdns_unavailable():
     return jsonify({'ok': False, 'error': (
         'модуль xray_xdns.py не загружен — обновление доехало не полностью. '
         'Накатите обновление панели заново. ' + (XDNS_IMPORT_ERROR or ''))}), 400
+
+
+@app.route('/api/xray/geoip', methods=['GET', 'POST'])
+@login_required
+def api_xray_geoip():
+    """Полная база стран geoip.dat (вкладка «Ядро XRay»): состояние, тумблер
+    автообновления. Включение тумблера сразу запускает проверку в фоне."""
+    if not xray_core_update:
+        return jsonify({'ok': False, 'error': 'модуль xray_core_update не загружен'}), 400
+    if request.method == 'POST':
+        data = request.get_json(silent=True) or {}
+        on = bool(data.get('auto'))
+        SERVER_CFG['xray_geoip_auto'] = on
+        _save_server_config(SERVER_CFG)
+        audit('info', 'Автообновление geoip.dat ' + ('включено' if on else 'выключено'))
+        if on:
+            threading.Thread(target=xray_core_update.geoip_update, daemon=True).start()
+    return jsonify(dict(xray_core_update.geoip_status(), ok=True))
 
 
 @app.route('/api/xray/xdns', methods=['GET'])
@@ -12105,6 +12140,7 @@ try:
         '_save_server_config': _save_server_config,
         'apply_xray_dns': apply_xray_dns,
         'asn_lookup': asn_lookup,
+        '_github_latest_tag': _github_latest_tag,
         'SERVER_CFG': SERVER_CFG,
         'DATA_DIR': DATA_DIR,
         'PANEL_VERSION': PANEL_VERSION,

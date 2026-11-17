@@ -53,6 +53,7 @@ login_required = None
 _save_server_config = None
 apply_xray_dns = None
 asn_lookup = None
+_github_latest_tag = None     # необязательная: без неё — только зашитая версия
 SERVER_CFG = {}
 DATA_DIR = ''
 PANEL_VERSION = ''
@@ -97,6 +98,8 @@ DEFAULTS = {
     'mode': '',            # 'resolved' | 'resolvconf' — как переключена система
     'auto_failover': True, # наш DNS лёг — временно отдать систему DNS хостера
     'failover_since': 0,   # >0 — сейчас в таком откате (unix-время начала)
+    'auto_update': True,   # сам обновлять dnsproxy до проверенной версии
+    'update_last_check': 0,
 }
 
 # Готовые варианты — кнопки над полем. Только крупные, как в клиентской модалке.
@@ -609,6 +612,15 @@ def probe(server, port):
         res['error'] = 'сервер ответил ошибкой' if rc else 'пустой ответ'
         return res
     res['ok'] = True
+    if ms < 2:
+        # example.com пришёл из кеша (0 мс) — это не скорость резолвера. Мерим на
+        # случайном имени, которого в кеше быть не может.
+        try:
+            t0 = time.time()
+            query(server, port, 'awgp-%08x.example.com' % random.getrandbits(32))
+            res['ms'] = max(1, int((time.time() - t0) * 1000))
+        except Exception:
+            pass
 
     def answer(name):
         try:
@@ -683,16 +695,25 @@ def engine_version():
         return ''
 
 
-def ensure_binary(step=None):
-    if engine_version():
-        return
+def _ver(v):
+    return tuple(int(x) for x in re.findall(r'\d+', v or '')[:3])
+
+
+def _latest_tag():
+    fn = globals().get('_github_latest_tag')
+    try:
+        return (fn(DNSPROXY_REPO) or '') if fn else ''
+    except Exception:
+        return ''
+
+
+def _download(tag, dest):
+    """Скачать бинарь релиза tag в dest (0755). Ничего установленного не трогает."""
     arch = _arch()
     if not arch:
         raise RuntimeError('архитектура сервера не поддерживается сборками dnsproxy')
-    asset = 'dnsproxy-linux-%s-%s.tar.gz' % (arch, DNSPROXY_VERSION)
-    url = 'https://github.com/%s/releases/download/%s/%s' % (DNSPROXY_REPO, DNSPROXY_VERSION, asset)
-    if step:
-        step('Скачиваю dnsproxy %s…' % DNSPROXY_VERSION)
+    asset = 'dnsproxy-linux-%s-%s.tar.gz' % (arch, tag)
+    url = 'https://github.com/%s/releases/download/%s/%s' % (DNSPROXY_REPO, tag, asset)
     req = urllib.request.Request(url, headers={'User-Agent': 'awg-panel/%s' % PANEL_VERSION})
     with urllib.request.urlopen(req, timeout=120) as r:
         blob = r.read()
@@ -708,15 +729,119 @@ def ensure_binary(step=None):
             data = tf.extractfile(member).read()
         if len(data) < 2 * 1024 * 1024:
             raise RuntimeError('скачанный dnsproxy слишком мал — похоже, релиз недоступен')
-        tmp = DNSPROXY_BIN + '.new'
-        with open(tmp, 'wb') as f:
+        with open(dest, 'wb') as f:
             f.write(data)
-        os.chmod(tmp, 0o755)
-        os.replace(tmp, DNSPROXY_BIN)
+        os.chmod(dest, 0o755)
     finally:
         shutil.rmtree(d, ignore_errors=True)
+
+
+def _bin_version(path):
+    try:
+        out = subprocess.run([path, '--version'], capture_output=True, text=True, timeout=5)
+        m = re.search(r'v?\d+\.\d+\.\d+', out.stdout + out.stderr)
+        return m.group(0) if m else ''
+    except Exception:
+        return ''
+
+
+def ensure_binary(step=None):
+    """Первая установка: потолок из proto_limits (проверенная версия), без него —
+    зашитая DNSPROXY_VERSION."""
+    if engine_version():
+        return
+    tag = DNSPROXY_VERSION
+    try:
+        from modules import proto_limits
+        tag = proto_limits.pick('dnsproxy', _latest_tag()) or DNSPROXY_VERSION
+    except Exception:
+        pass
+    if not tag.startswith('v'):
+        tag = 'v' + tag
+    if step:
+        step('Скачиваю dnsproxy %s…' % tag)
+    tmp = DNSPROXY_BIN + '.new'
+    _download(tag, tmp)
+    os.replace(tmp, DNSPROXY_BIN)
     if not engine_version():
         raise RuntimeError('dnsproxy скачан, но не запускается')
+
+
+# --- тихое обновление -----------------------------------------------------------
+# Только до потолка из proto_limits: версию открывает разработчик панели. Новая
+# сборка сначала отвечает с ТЕКУЩИМ конфигом на свободном порту, потом подменяет
+# бинарь; не поднялась на 127.0.0.2 — возвращается прежний (.prev).
+
+UPDATE_EVERY = 86400
+_updating = {'on': False}
+
+
+def safe_update():
+    """(обновлено?, текст)."""
+    cur = engine_version()
+    if not cur:
+        return False, 'dnsproxy не установлен'
+    try:
+        from modules import proto_limits
+        target, hold = proto_limits.update_target('dnsproxy', cur, _latest_tag())
+    except Exception as e:
+        return False, 'нет таблицы проверенных версий: %s' % e
+    if not target or _ver(target) <= _ver(cur):
+        return False, hold or 'установлена проверенная версия'
+    if not _lock.acquire(blocking=False):
+        return False, 'идёт другая операция с DNS'
+    _updating['on'] = True
+    cand = DNSPROXY_BIN + '.cand'
+    try:
+        _download(target, cand)
+        if not _bin_version(cand):
+            raise RuntimeError('новый dnsproxy не запускается')
+        s = settings()
+        live = s.get('enabled') and os.path.exists(CONF_FILE)
+        if live:
+            main, fb = parse_many(s['main']), parse_many(s['fallback'])
+            t = trial([e for e in main if e['ok']], s.get('sys_upstream') or [], full=False, binary=cand)
+            if not t.get('ok'):
+                raise RuntimeError('новый dnsproxy не ответил с вашим DNS: %s' % (t.get('error') or '?'))
+        shutil.copy2(DNSPROXY_BIN, DNSPROXY_BIN + '.prev')
+        os.replace(cand, DNSPROXY_BIN)
+        if live:
+            _sh(['systemctl', 'restart', UNIT_NAME], 20)
+            ok, err = _wait_listen()
+            if not ok:
+                os.replace(DNSPROXY_BIN + '.prev', DNSPROXY_BIN)
+                _sh(['systemctl', 'restart', UNIT_NAME], 20)
+                back, _e = _wait_listen()
+                audit('error', 'dnsproxy %s не ответил (%s) — возвращён %s%s'
+                      % (target, err, cur, '' if back else ', но и он не отвечает'))
+                return False, 'новая версия не ответила — возвращена %s' % cur
+        audit('info', 'dnsproxy обновлён: %s → %s' % (cur, target))
+        return True, '%s → %s' % (cur, target)
+    except Exception as e:
+        audit('warn', 'dnsproxy не обновлён: %s' % (str(e)[:200] or e.__class__.__name__))
+        return False, str(e)[:200]
+    finally:
+        try:
+            if os.path.exists(cand):
+                os.remove(cand)
+        except OSError:
+            pass
+        _updating['on'] = False
+        _lock.release()
+
+
+def _update_loop():
+    time.sleep(600)
+    while True:
+        try:
+            s = settings()
+            due = time.time() - float(s.get('update_last_check') or 0) >= UPDATE_EVERY
+            if s.get('auto_update', True) and due and engine_version():
+                _save({'update_last_check': int(time.time())})
+                safe_update()
+        except Exception:
+            pass
+        time.sleep(3600)
 
 
 def _yaml_list(items):
@@ -778,7 +903,7 @@ def _free_port():
     raise RuntimeError('не нашлось свободного порта для пробного запуска')
 
 
-def trial(entries, sys_upstream, full=True):
+def trial(entries, sys_upstream, full=True, binary=None):
     """Пробный dnsproxy на 127.0.0.1:<свободный> с этими резолверами → probe()."""
     port = _free_port()
     d = tempfile.mkdtemp(prefix='awgp-dnstrial-')
@@ -788,7 +913,7 @@ def trial(entries, sys_upstream, full=True):
         with open(cfg, 'w') as f:
             f.write(render_config(entries, [], sys_upstream, '127.0.0.1', port))
         logf = open(os.path.join(d, 'out.log'), 'w')
-        p = subprocess.Popen([DNSPROXY_BIN, '--config-path=' + cfg], stdout=logf, stderr=subprocess.STDOUT)
+        p = subprocess.Popen([binary or DNSPROXY_BIN, '--config-path=' + cfg], stdout=logf, stderr=subprocess.STDOUT)
         res = None
         until = time.time() + 4
         while time.time() < until:
@@ -1227,8 +1352,8 @@ def _health_tick():
     if not s.get('enabled'):
         _health.update(ok=None, ts=0, error='', fails=0, oks=0)
         return
-    if _job.get('state') == 'running':
-        return     # включение/выключение идёт прямо сейчас — не мешать ему
+    if _job.get('state') == 'running' or _updating['on']:
+        return     # включение/выключение или обновление идёт прямо сейчас — не мешать
     now = int(time.time())
     ok, ms, err = _probe_dnsproxy()
     if not ok and not engine_version():
@@ -1321,11 +1446,32 @@ def start_background():
         return
     _started = True
     threading.Thread(target=_health_loop, daemon=True).start()
+    threading.Thread(target=_update_loop, daemon=True).start()
 
 
 # =============================================================================
 # Роуты
 # =============================================================================
+
+def probe_info():
+    """Блок для /api/probe/ping внешнего мониторинга: есть ли что проверять."""
+    s = settings()
+    return {'supported': True, 'enabled': bool(s['enabled']), 'port': 53 if s['enabled'] else 0}
+
+
+def probe_state():
+    """Для /api/probe/dns внешнего мониторинга. up — свой DNS отвечает и система
+    ходит через него; «временно на DNS хостера» — это тоже сбой."""
+    st = _state()
+    if not st['enabled']:
+        return {'enabled': False, 'up': None}
+    fo = bool(st['failover_since'])
+    up = st['ok'] is True and not fo
+    if st['ok'] is None and not fo:
+        up = None          # сторож ещё не успел проверить — данных нет
+    return {'enabled': True, 'up': up, 'ms': st['ms'] if up else None,
+            'failover': fo, 'error': st['error'], 'checked_at': st['checked_at']}
+
 
 def _state():
     s = settings()
@@ -1347,7 +1493,7 @@ def api_state():
 def api_get():
     s = settings()
     return jsonify({
-        'settings': {k: s[k] for k in ('enabled', 'main', 'fallback', 'show_button', 'mode', 'auto_failover')},
+        'settings': {k: s[k] for k in ('enabled', 'main', 'fallback', 'show_button', 'mode', 'auto_failover', 'auto_update')},
         'state': _state(),
         'main': [_public(e) for e in parse_many(s['main'])],
         'fallback': [_public(e) for e in parse_many(s['fallback'])],
@@ -1411,7 +1557,7 @@ def api_apply():
 def api_button():
     """Тумблеры окна, которые систему не трогают: кнопка в шапке и авто-откат."""
     d = request.get_json(silent=True) or {}
-    patch = {k: bool(d[k]) for k in ('show_button', 'auto_failover') if k in d}
+    patch = {k: bool(d[k]) for k in ('show_button', 'auto_failover', 'auto_update') if k in d}
     if patch:
         _save(patch)
     return jsonify({'ok': True, 'state': _state()})

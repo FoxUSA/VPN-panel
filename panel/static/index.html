@@ -2017,7 +2017,6 @@ body::before {
 .hh-tip-r i { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
 .hh-tip-r b { font-weight: 600; margin-left: auto; padding-left: 10px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .hh-tip-r .hh-tip-pk { color: var(--text3); font-weight: 400; margin-left: auto; padding-left: 8px; }
-.hh-rec { grid-column: 1 / -1; }
 .hh-rec-row { display: flex; align-items: baseline; gap: 10px; padding: 5px 0; border-top: 1px solid var(--border); font-size: 13px; }
 .hh-rec-row:first-of-type { border-top: none; }
 .hh-rec-l { flex: 1 1 auto; min-width: 0; color: var(--text2); }
@@ -2032,7 +2031,17 @@ body::before {
 .probe-h { font-size: 11px; color: var(--text3); margin-top: 2px; line-height: 1.4; }
 .probe-row .btn { flex: 0 0 auto; }
 
+/* «Страница входа»: слева — настройки, справа — что получилось (URL, файлы).
+   В режиме «Вход по IP» правой колонке показывать нечего — окно узкое. */
+.fl-modal { width: 1000px; max-width: 95vw; }
+.fl-modal.fl-single { width: 640px; }
+.fl-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.fl-single .fl-grid { grid-template-columns: minmax(0, 1fr); }
+.fl-single .fl-out { display: none; }
+.fl-col > :last-child { margin-bottom: 0 !important; }
+
 @media (max-width: 720px) {
+  .fl-grid { grid-template-columns: minmax(0, 1fr); }
   .hh-grid { grid-template-columns: minmax(0, 1fr); }
   .hh-seg { display: flex; width: 100%; }
   .hh-seg button { flex: 1 1 0; padding: 7px 2px; font-size: 12.5px; }
@@ -2517,9 +2526,19 @@ code.tpl-chip, .tpl-info-head code { font-family: 'JetBrains Mono', monospace; }
   .peer-actions .btn-logs-toggle {
     flex: 0 0 auto; padding: 6px; min-width: 0; line-height: 0;
     display: inline-flex; align-items: center; justify-content: center;
+    color: var(--text);  /* иконка белая, как у соседних .btn-act, а не серая ghost */
   }
   .btn-logs-toggle .lbl-txt { display: none; }
   .btn-logs-toggle .lbl-ico { display: block; }
+  /* Выкл — в правый верхний угол карточки, вне потока: высота строк не меняется,
+     а ряд кнопок теряет одну и влезает в ширину экрана. Имя и бейджи не заходят
+     под кнопку за счёт отступа справа. */
+  .peer-card { position: relative; }
+  .peer-actions { gap: 4px; }
+  .peer-actions .btn.btn-sm:not(.btn-logs-toggle) { padding-left: 10px; padding-right: 10px; }
+  .peer-actions .btn-power { position: absolute; top: 4px; right: 6px; width: 28px; height: 28px; }
+  .peer-actions .btn-power svg { width: 18px; height: 18px; }
+  .peer-card:has(.btn-power) .peer-name-row { padding-right: 26px; }
   .peer-meta { grid-template-columns: 1fr; gap: 8px; }
   .peer-meta-item .val { font-size: 12px; }
   .modal { padding: 20px; width: calc(100vw - 24px); max-width: calc(100vw - 24px); }
@@ -3178,7 +3197,7 @@ code.tpl-chip, .tpl-info-head code { font-family: 'JetBrains Mono', monospace; }
         </div>
       </div>
       <div class="su-card">
-        <div class="su-card-title">Шаблоны blackmatrix7 <span id="suBm7Ver" class="su-ver"></span></div>
+        <div class="su-card-title">Шаблоны URL <span id="suBm7Ver" class="su-ver"></span></div>
         <div id="suBm7Meta" class="su-meta"></div>
         <div class="su-sched">
           <label class="su-days-lbl">Проверять раз в
@@ -3198,7 +3217,6 @@ code.tpl-chip, .tpl-info-head code { font-family: 'JetBrains Mono', monospace; }
 
     <div id="suProgress" style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--text3);max-height:160px;overflow-y:auto;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:8px;display:none;margin-bottom:10px;"></div>
     <div class="modal-actions">
-      <button id="suMainBtn" class="btn btn-sm btn-ghost" onclick="suMainAction()">Проверить</button>
       <button id="suSaveBtn" class="btn btn-sm btn-success" onclick="suSaveAll()">Сохранить</button>
       <button class="btn btn-sm btn-ghost" onclick="closeModal('serverUpdatesModal')">Закрыть</button>
     </div>
@@ -3217,7 +3235,7 @@ code.tpl-chip, .tpl-info-head code { font-family: 'JetBrains Mono', monospace; }
     <input type="password" id="newPasswordInput" placeholder="Новый пароль (мин 6 символов)" autocomplete="new-password">
     <div class="modal-actions">
       <button class="btn btn-sm btn-ghost" onclick="closeModal('changePasswordModal')">Отмена</button>
-      <button class="btn btn-sm btn-success" onclick="submitChangePassword()">Сохранить</button>
+      <button class="btn btn-sm btn-success" id="pwSaveBtn" onclick="submitChangePassword()">Сохранить</button>
     </div>
   </div>
 </div>
@@ -3349,12 +3367,14 @@ code.tpl-chip, .tpl-info-head code { font-family: 'JetBrains Mono', monospace; }
 
 <!-- Fake Landing Modal (после settingsModal чтобы перекрывать его) -->
 <div id="fakeLandingModal" class="modal-overlay hidden">
-  <div class="modal" style="max-width:640px;">
+  <div class="modal fl-modal" id="fakeLandingBox">
     <h2>Страница входа</h2>
     <p style="color:var(--text2);font-size:13px;margin-bottom:14px;">
       Как открывается панель и что видят посторонние на корневом адресе <code>/</code>.
     </p>
 
+    <div class="fl-grid">
+    <div class="fl-col">
     <div id="fakeModeRealityHint" style="display:none;margin-bottom:12px;padding:10px 12px;background:rgba(96,165,250,0.10);border:1px solid var(--accent,#60a5fa);border-radius:8px;color:var(--text2);font-size:12px;">
       Обнаружен <b>Reality</b> на XRay. Декой на корне отдаёт сам Reality (уводит на dest-сайт), поэтому фейк-сайт в панели не нужен — рекомендуется режим <b>«Только по ключу»</b>.
     </div>
@@ -3394,19 +3414,12 @@ code.tpl-chip, .tpl-info-head code { font-family: 'JetBrains Mono', monospace; }
       </div>
     </div>
 
-    <div id="fakeSiteUrlBox" style="margin:14px 0;padding:14px;background:var(--bg);border:1px solid var(--border);border-radius:8px;">
-      <div style="color:var(--text3);font-size:12px;margin-bottom:6px;">Адрес сайта-маскировки:</div>
-      <div style="display:flex;align-items:center;gap:8px;">
-        <div id="fakeSiteUrl" style="flex:1;font-family:'JetBrains Mono',monospace;font-size:18px;color:var(--text);user-select:all;word-break:break-all;">—</div>
-        <button class="btn btn-sm btn-ghost" onclick="copyFakeSiteUrl()" title="Скопировать" style="flex:0 0 auto;padding:4px 10px;">⧉</button>
-      </div>
-      <div id="fakeSiteUrlHint" style="color:var(--text3);font-size:12px;margin-top:8px;"></div>
     </div>
-
-    <div id="fakeLoginUrlBox" style="margin:14px 0;padding:14px;background:var(--bg);border:1px solid var(--border);border-radius:8px;">
+    <div class="fl-col fl-out">
+    <div id="fakeLoginUrlBox" style="margin:0 0 14px;padding:14px;background:var(--bg);border:1px solid var(--border);border-radius:8px;">
       <div style="color:var(--text3);font-size:12px;margin-bottom:6px;">Текущий URL входа:</div>
       <div style="display:flex;align-items:center;gap:8px;">
-        <div id="fakeLoginUrl" style="flex:1;font-family:'JetBrains Mono',monospace;font-size:18px;color:var(--text);user-select:all;word-break:break-all;"></div>
+        <div id="fakeLoginUrl" style="flex:1;font-family:'JetBrains Mono',monospace;font-size:15px;color:var(--text);user-select:all;word-break:break-all;"></div>
         <button class="btn btn-sm btn-ghost" onclick="copyFakeLoginUrl()" title="Скопировать" style="flex:0 0 auto;padding:4px 10px;">⧉</button>
       </div>
       <div style="color:#fa3;font-size:12px;margin-top:8px;">⚠ Запиши этот адрес. Если потеряешь — восстановить можно только через SSH:<br>
@@ -3414,7 +3427,16 @@ code.tpl-chip, .tpl-info-head code { font-family: 'JetBrains Mono', monospace; }
       </div>
     </div>
 
-    <div id="fakeFilesWrap" style="margin:14px 0;padding:14px;background:var(--bg);border:1px solid var(--border);border-radius:8px;">
+    <div id="fakeSiteUrlBox" style="margin:0 0 14px;padding:14px;background:var(--bg);border:1px solid var(--border);border-radius:8px;">
+      <div style="color:var(--text3);font-size:12px;margin-bottom:6px;">Адрес сайта-маскировки:</div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <div id="fakeSiteUrl" style="flex:1;font-family:'JetBrains Mono',monospace;font-size:15px;color:var(--text);user-select:all;word-break:break-all;">—</div>
+        <button class="btn btn-sm btn-ghost" onclick="copyFakeSiteUrl()" title="Скопировать" style="flex:0 0 auto;padding:4px 10px;">⧉</button>
+      </div>
+      <div id="fakeSiteUrlHint" style="color:var(--text3);font-size:12px;margin-top:8px;"></div>
+    </div>
+
+    <div id="fakeFilesWrap" style="margin:0;padding:14px;background:var(--bg);border:1px solid var(--border);border-radius:8px;">
       <div style="color:var(--text);font-weight:600;margin-bottom:6px;">Как положить файлы фейк-сайта</div>
       <div style="color:var(--text2);font-size:13px;line-height:1.55;">
         Папка на сервере (авто-детект): <code id="fakePublicDir" style="user-select:all;">—</code> <span id="fakePublicDirStatus" style="font-size:11px;"></span><br>
@@ -3426,6 +3448,8 @@ code.tpl-chip, .tpl-info-head code { font-family: 'JetBrains Mono', monospace; }
         Если папки нет — создать:<br>
         <code id="fakeMkdirCmd" style="user-select:all;font-size:12px;">—</code>
       </div>
+    </div>
+    </div>
     </div>
 
     <div class="modal-actions">
@@ -3457,7 +3481,7 @@ code.tpl-chip, .tpl-info-head code { font-family: 'JetBrains Mono', monospace; }
     </div>
     <div class="modal-actions">
       <button class="btn btn-sm btn-ghost" onclick="closeModal('profileNamingModal')">Отмена</button>
-      <button class="btn btn-sm btn-success" onclick="submitProfileNaming()">Сохранить</button>
+      <button class="btn btn-sm btn-success" id="profileNamingSaveBtn" onclick="submitProfileNaming()">Сохранить</button>
     </div>
   </div>
 </div>
@@ -3518,7 +3542,7 @@ code.tpl-chip, .tpl-info-head code { font-family: 'JetBrains Mono', monospace; }
     <div id="platformsList" style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px;"></div>
     <div class="modal-actions">
       <button class="btn btn-sm btn-ghost" onclick="closeModal('protocolsModal')">Отмена</button>
-      <button class="btn btn-sm btn-success" onclick="submitProtocols()">Сохранить</button>
+      <button class="btn btn-sm btn-success" id="protocolsSaveBtn" onclick="submitProtocols()">Сохранить</button>
     </div>
   </div>
 </div>
@@ -3618,7 +3642,7 @@ code.tpl-chip, .tpl-info-head code { font-family: 'JetBrains Mono', monospace; }
         <span id="bkRunStatus" class="bk-run-status"></span>
       </div>
       <button class="btn btn-sm btn-ghost" onclick="closeModal('backupModal')">Закрыть</button>
-      <button class="btn btn-sm btn-success" onclick="backupSaveSchedule()">Сохранить настройки</button>
+      <button class="btn btn-sm btn-success" id="bkSaveBtn" onclick="backupSaveSchedule()">Сохранить настройки</button>
     </div>
   </div>
 </div>
@@ -3675,6 +3699,13 @@ code.tpl-chip, .tpl-info-head code { font-family: 'JetBrains Mono', monospace; }
       </span>
       <span class="switch-row-lbl">Если свой DNS не отвечает — временно перейти на DNS хостера и вернуться, когда заработает</span>
     </label>
+    <label class="switch-row sdns-btn-row" title="Раз в сутки: новая версия сначала отвечает с вашим DNS на пробном порту, потом заменяет старую; не ответила — возвращается прежняя">
+      <span class="switch switch-tinted">
+        <input type="checkbox" id="sdnsAutoUpd" onchange="_sdnsSaveButton()">
+        <span class="switch-slider"></span>
+      </span>
+      <span class="switch-row-lbl">Обновлять dnsproxy сам — только версии, проверенные для панели</span>
+    </label>
 
     <div id="sdnsOut" class="dns-check hidden"></div>
 
@@ -3713,6 +3744,20 @@ code.tpl-chip, .tpl-info-head code { font-family: 'JetBrains Mono', monospace; }
 .sdns-foot { align-items: center; }
 .dns-check-line.warn .mk, .dns-check-line.warn .st { color: var(--orange, #fbbf24); }
 .dns-check-line.step { color: var(--text3); }
+/* Итог операции в окне DNS — заметно, чтобы было ясно: работает, можно закрывать. */
+.sdns-banner { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border-radius: 8px; border: 1px solid; margin-bottom: 6px; }
+.sdns-banner.ok { background: rgba(52, 211, 153, .10); border-color: rgba(52, 211, 153, .45); }
+.sdns-banner.bad { background: rgba(248, 113, 113, .10); border-color: rgba(248, 113, 113, .5); }
+.sdns-banner.warn { background: rgba(251, 191, 36, .10); border-color: rgba(251, 191, 36, .5); }
+.sdns-banner-mk { font-size: 22px; line-height: 1; font-weight: 700; flex: 0 0 auto; }
+.sdns-banner.ok .sdns-banner-mk { color: var(--green); }
+.sdns-banner.bad .sdns-banner-mk { color: var(--red, #f87171); }
+.sdns-banner.warn .sdns-banner-mk { color: var(--orange, #fbbf24); }
+.sdns-banner-t { font-size: 15px; font-weight: 700; color: var(--text); }
+.sdns-banner-s { font-size: 12.5px; color: var(--text2); margin-top: 2px; line-height: 1.45; }
+.sdns-steps { margin-top: 6px; color: var(--text3); font-size: 12px; }
+.sdns-steps summary { cursor: pointer; }
+.sdns-steps .dns-check-line { padding-left: 4px; }
 /* Высота — как у соседних .cog-btn (их задаёт значок 22px): строка той же высоты, текст мелкий. */
 .srv-dns-btn .srv-dns-lbl { display: inline-block; font-size: 12px; font-weight: 700; letter-spacing: .04em; line-height: 22px; vertical-align: top; }
 /* Включён и отвечает — надпись нашим салатовым, как акцентный текст панели. */

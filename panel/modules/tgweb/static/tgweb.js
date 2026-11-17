@@ -438,7 +438,8 @@
           '</div>' +
           '<div class="peer-actions">' +
             '<button class="btn btn-sm btn-ghost" onclick="' + call('link') + '">Конфиг</button>' +
-            '<button class="btn btn-sm btn-ghost" onclick="' + call('logs') + '">Логи</button>' +
+            (ico('logsBtnHtml', [call('logs')]) ||
+              '<button class="btn btn-sm btn-ghost" onclick="' + call('logs') + '">Логи</button>') +
             ico('allowIpBtnHtml', [call('allowip'),
               ((c.allow_ips || []).length + (c.block_ips || []).length) > 0,
               'Фильтрация по IP (зелёный = список задан)']) +
@@ -932,6 +933,16 @@
       if (b && b.act) b.act(ov);
       if (b && !b.keepOpen) ov.remove();
     });
+    // «Сохранить/Применить» горит только при правках (dirtyTrack в app.js). После
+    // текущего кода: вызывающий ещё может дописать значения в поля.
+    setTimeout(function () {
+      if (typeof window.dirtyTrack !== 'function') return;
+      (buttons || []).forEach(function (b, i) {
+        if (/^(Сохранить|Применить)/.test(b.text || '')) {
+          window.dirtyTrack(ov, ov.querySelector('[data-btn="' + i + '"]'));
+        }
+      });
+    }, 0);
     return ov;
   }
 

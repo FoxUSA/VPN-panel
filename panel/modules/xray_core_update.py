@@ -25,10 +25,12 @@ import copy
 import json
 import os
 import platform
+import re
 import shutil
 import socket
 import subprocess
 import tempfile
+import threading
 import time
 import zipfile
 
@@ -347,3 +349,181 @@ def safe_update(tag):
                           _tail(journal)))
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+
+# =============================================================================
+# Полная база стран geoip.dat (Loyalsoldier) — тихое автообновление
+# =============================================================================
+# С v26.10.21 в релизах XRay geoip.dat урезан до RU/CN/IR, и _keep_installed_geoip
+# держит прежнюю базу — она стареет навсегда. Здесь берём полную (260 кодов,
+# обновляется ежедневно) и подменяем, только если:
+#   * сумма совпала с опубликованной .sha256sum;
+#   * в новой базе есть ВСЕ коды, которые реально стоят в правилах XRay и Hysteria
+#     (у XTLS есть служебные BLACKLIST-RU, IN-RU и т.п., которых у Loyalsoldier нет —
+#     пока они не используются, это не помеха);
+#   * `xray run -test` с живым конфигом проходит на новой базе.
+# Рестарта нет: XRay и Hysteria читают базу при своём старте — подхватят при
+# следующем перезапуске. Предыдущая копия — geoip.dat.prev.
+
+GEOIP_URL = 'https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat'
+GEOIP_SHA_URL = GEOIP_URL + '.sha256sum'
+GEOIP_EVERY = 7 * 86400
+GEOIP_MIN_SIZE = 4 * 1024 * 1024
+_GEOIP_RE = re.compile(r'geoip:(!?)([A-Za-z0-9_-]+)')
+_geoip_lock = threading.Lock()
+
+
+def _cfg():
+    return _D.get('settings') if isinstance(_D.get('settings'), dict) else {}
+
+
+def _cfg_save(patch):
+    s = _D.get('settings')
+    if not isinstance(s, dict):
+        return
+    s.update(patch)
+    fn = _D.get('save_settings')
+    if fn:
+        try:
+            fn(s)
+        except Exception:
+            pass
+
+
+def _used_geoip_codes():
+    """Коды geoip:xx из живых конфигов XRay и Hysteria (верхний регистр)."""
+    used = set()
+    for path in (_D.get('xray_config'), _D.get('hysteria_config')):
+        if not path or not os.path.isfile(path):
+            continue
+        try:
+            with open(path, encoding='utf-8', errors='replace') as f:
+                text = f.read()
+        except OSError:
+            continue
+        for _neg, code in _GEOIP_RE.findall(text):
+            used.add(code.upper())
+    return used
+
+
+def _sha256(path):
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(1 << 20), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _fetch(url, timeout):
+    import urllib.request
+    req = urllib.request.Request(url, headers={'User-Agent': 'awg-panel'})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read()
+
+
+def geoip_status():
+    s = _cfg()
+    cur = os.path.join(ASSET_DIR, 'geoip.dat')
+    try:
+        codes = len(_dat_tags(cur)) if os.path.isfile(cur) else 0
+    except Exception:
+        codes = 0
+    return {'auto': bool(s.get('xray_geoip_auto', True)),
+            'last_check': int(s.get('xray_geoip_last_check') or 0),
+            'updated': int(s.get('xray_geoip_updated') or 0),
+            'error': s.get('xray_geoip_error') or '',
+            'codes': codes, 'source': 'Loyalsoldier/v2ray-rules-dat'}
+
+
+def geoip_update():
+    """(обновлено?, текст). Безопасно вызывать сколько угодно раз."""
+    if not _geoip_lock.acquire(blocking=False):
+        return False, 'обновление geoip.dat уже идёт'
+    work = None
+    try:
+        xray_bin = _D.get('xray_bin') or '/usr/local/bin/xray'
+        cfg_path = _D.get('xray_config') or ''
+        cur = os.path.join(ASSET_DIR, 'geoip.dat')
+        now = int(time.time())
+        _cfg_save({'xray_geoip_last_check': now})
+        if not os.path.isfile(xray_bin) or not os.path.isdir(ASSET_DIR):
+            return False, 'XRay не установлен'
+        want = _fetch(GEOIP_SHA_URL, 30).decode('ascii', 'replace').split()[0].strip().lower()
+        if not re.fullmatch(r'[0-9a-f]{64}', want):
+            raise RuntimeError('не удалось прочитать контрольную сумму')
+        if os.path.isfile(cur) and _sha256(cur) == want:
+            _cfg_save({'xray_geoip_error': ''})
+            return False, 'установлена свежая база'
+
+        work = tempfile.mkdtemp(prefix='awgp-geoip-')
+        new = os.path.join(work, 'geoip.dat')
+        with open(new, 'wb') as f:
+            f.write(_fetch(GEOIP_URL, 180))
+        if os.path.getsize(new) < GEOIP_MIN_SIZE:
+            raise RuntimeError('скачанный файл слишком мал')
+        if _sha256(new) != want:
+            raise RuntimeError('контрольная сумма не совпала')
+
+        new_tags = _dat_tags(new)
+        missing = sorted(_used_geoip_codes() - new_tags)
+        if missing:
+            raise RuntimeError('в новой базе нет кодов из ваших правил: %s' % ', '.join(missing[:10]))
+
+        # Пробный разбор живого конфига на новой базе (geosite и прочее — текущие).
+        assets = os.path.join(work, 'assets')
+        os.makedirs(assets)
+        for name in os.listdir(ASSET_DIR):
+            src = os.path.join(ASSET_DIR, name)
+            if name.endswith('.dat') and name != 'geoip.dat' and os.path.isfile(src):
+                os.symlink(src, os.path.join(assets, name))
+        os.symlink(new, os.path.join(assets, 'geoip.dat'))
+        if cfg_path and os.path.isfile(cfg_path):
+            with open(cfg_path, encoding='utf-8') as f:
+                live = json.load(f)
+            live['log'] = {'loglevel': 'warning'}
+            ok, out = _test(xray_bin, live, work, assets)
+            if not ok:
+                raise RuntimeError('xray -test с новой базой не прошёл: %s' % _tail(out, 3))
+
+        if os.path.isfile(cur):
+            shutil.copy2(cur, cur + '.prev')
+        _put(new, cur)
+        os.chmod(cur, 0o644)
+        _cfg_save({'xray_geoip_updated': now, 'xray_geoip_error': ''})
+        _audit('info', 'geoip.dat обновлён: полная база Loyalsoldier, кодов %d — XRay и Hysteria '
+                       'подхватят при следующем перезапуске' % len(new_tags))
+        return True, 'обновлено: кодов %d' % len(new_tags)
+    except Exception as e:
+        msg = str(e)[:300] or e.__class__.__name__
+        _cfg_save({'xray_geoip_error': msg})
+        _audit('warn', 'geoip.dat не обновлён: %s' % msg)
+        return False, msg
+    finally:
+        if work:
+            shutil.rmtree(work, ignore_errors=True)
+        _geoip_lock.release()
+
+
+def _geoip_loop():
+    time.sleep(120)
+    while True:
+        try:
+            s = _cfg()
+            due = time.time() - float(s.get('xray_geoip_last_check') or 0) >= GEOIP_EVERY
+            if s.get('xray_geoip_auto', True) and due:
+                geoip_update()
+        except Exception:
+            pass
+        time.sleep(6 * 3600)
+
+
+_geoip_started = False
+
+
+def start_geoip_auto():
+    global _geoip_started
+    if _geoip_started:
+        return
+    _geoip_started = True
+    threading.Thread(target=_geoip_loop, daemon=True).start()

@@ -430,6 +430,7 @@ function setTableHtml(html) {
 
 function openEnableModal() { document.getElementById('enableModal').classList.remove('hidden'); }
 function closeEnableModal() { document.getElementById('enableModal').classList.add('hidden'); }
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeEnableModal(); });
 async function copyCmd() {
   try {
     await navigator.clipboard.writeText(document.getElementById('cmdBox').textContent);

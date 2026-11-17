@@ -532,7 +532,7 @@ function renderPeers(peers) {
         </div>
         <div class="peer-actions">
           <button class="btn btn-sm btn-ghost" onclick="showConfig('${pkAttr}','${nameAttr}')">Конфиг</button>
-          <button class="btn btn-sm btn-ghost btn-logs-toggle" onclick="openAwgLogs('${pkAttr}')" title="Логи" aria-label="Логи"><span class="lbl-txt">Логи</span><span class="lbl-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/><line x1="8" y1="9" x2="11" y2="9"/></svg></span></button>
+          ${logsBtnHtml(`openAwgLogs('${pkAttr}')`)}
           ${dnsBtnHtml(`toggleDnsLocal('${pkAttr}','${nameAttr}',${p.dns_local ? 'true' : 'false'}, null)`, !!p.dns_local, nameAttr)}
           ${pencilBtnHtml(`showRename('${pkAttr}','${nameAttr}')`)}
           ${trashBtnHtml(`showDelete('${pkAttr}','${nameAttr}')`)}
@@ -633,6 +633,67 @@ function escAttr(s) {
   return (s || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
 }
 
+// ---- «Сохранить/Применить» горит только при правках -------------------------
+// Зелёная кнопка читается как «есть несохранённое», поэтому в нетронутой форме
+// она серая. dirtyTrack(окно, кнопка) снимает значения всех полей окна — после
+// того, как окно заполнено; кнопка активна, пока текущие значения отличаются от
+// снимка (вернули как было — снова серая). После успешного сохранения —
+// dirtyReset(кнопка). Поля, которые не про настройки (поиск, фильтр), помечать
+// атрибутом data-dirty-ignore на них или на обёртке.
+function _dirtySnap(root) {
+  const parts = [];
+  root.querySelectorAll('input, select, textarea').forEach(el => {
+    if (el.closest('[data-dirty-ignore]')) return;
+    if (['button', 'submit', 'file', 'reset'].includes(el.type)) return;
+    const v = (el.type === 'checkbox' || el.type === 'radio') ? (el.checked ? '1' : '0') : String(el.value == null ? '' : el.value);
+    parts.push((el.id || el.name || '?') + '=' + v);
+  });
+  return parts.join('\u0001');
+}
+function dirtyRecheck(btn) {
+  if (!btn || !btn._dirtyRoot) return;
+  const dirty = _dirtySnap(btn._dirtyRoot) !== btn._dirtyBase;
+  btn.disabled = !dirty || !!btn._invalid;
+  btn.title = dirty ? (btn._dirtyTitle || '') : 'Изменений нет';
+}
+function dirtyTrack(root, btn) {
+  if (!root || !btn) return;
+  if (btn._dirtyTitle === undefined) btn._dirtyTitle = btn.title || '';
+  btn._dirtyRoot = root;
+  btn._dirtyBase = _dirtySnap(root);
+  if (!root._dirtyBtns) {
+    root._dirtyBtns = new Set();
+    const h = () => root._dirtyBtns.forEach(b => b.isConnected ? dirtyRecheck(b) : root._dirtyBtns.delete(b));
+    root.addEventListener('input', h);
+    root.addEventListener('change', h);
+  }
+  root._dirtyBtns.add(btn);
+  dirtyRecheck(btn);
+}
+function dirtyReset(btn) {
+  if (!btn || !btn._dirtyRoot) return;
+  btn._dirtyBase = _dirtySnap(btn._dirtyRoot);
+  dirtyRecheck(btn);
+}
+// Форма с проверкой ввода: кнопка горит, только если есть правки И ввод верный.
+function dirtySetValid(btn, ok) {
+  if (!btn) return;
+  btn._invalid = !ok;
+  if (btn._dirtyRoot) dirtyRecheck(btn); else btn.disabled = !ok;
+}
+function dirtyUntrack(btn) {
+  if (!btn || !btn._dirtyRoot) return;
+  if (btn._dirtyRoot._dirtyBtns) btn._dirtyRoot._dirtyBtns.delete(btn);
+  btn._dirtyRoot = null;
+  btn._invalid = false;
+  btn.disabled = false;
+  btn.title = btn._dirtyTitle || '';
+}
+function dirtyById(modalId, btnId) {
+  const m = document.getElementById(modalId), b = document.getElementById(btnId);
+  if (m && b) dirtyTrack(m, b);
+}
+
 // Modals
 function showAddModal() {
   document.getElementById('newClientName').value = '';
@@ -643,6 +704,31 @@ function showAddModal() {
 function closeModal(id) {
   document.getElementById(id).classList.add('hidden');
 }
+
+// Esc закрывает верхнюю открытую модалку — той же кнопкой «Закрыть/Отмена/✕»,
+// что и мышью: у неё своя уборка (resolve промиса, сброс состояния). Кто
+// обработал Esc сам (поповер, правка ячейки) — ставит preventDefault/stopPropagation.
+// Пока висит busy-оверлей (идёт операция) — ничего не закрываем.
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape' || e.defaultPrevented || e.isComposing) return;
+  const busy = document.getElementById('panelRestartOverlay');
+  if (busy && busy.style.display !== 'none') return;
+  const open = [...document.querySelectorAll('.modal-overlay')]
+    .filter(ov => !ov.classList.contains('hidden') && ov.getClientRects().length);
+  if (!open.length) return;
+  // Сверху — больший z-index, при равном — позже в DOM.
+  const z = ov => parseInt(getComputedStyle(ov).zIndex, 10) || 0;
+  const top = open.reduce((a, b) => (z(b) >= z(a) ? b : a));
+  const shown = el => el && el.getClientRects().length && !el.disabled;
+  const btn = [...top.querySelectorAll('[data-close], [data-cancel]')].find(shown)
+    || [...top.querySelectorAll('button[onclick*="closeModal("]')].find(shown)
+    // openAlert: одна кнопка «OK», она же и закрывает.
+    || (!top.querySelector('[data-cancel]') && [...top.querySelectorAll('[data-ok]')].find(shown));
+  e.preventDefault();
+  if (btn) btn.click();
+  else if (top.id) closeModal(top.id);
+  else top.remove();
+});
 
 let _awgCreating = false;
 async function createClient() {
@@ -1603,7 +1689,7 @@ const SETTINGS_ITEMS = [
   {
     id: 'server_name',
     title: 'Сервер и обновления',
-    desc: 'Имя сервера (в шапке и в именах конфигов), обновление панели, гео-баз и шаблонов blackmatrix7, пароль и вход без пароля по IP.',
+    desc: 'Имя сервера (в шапке и в именах конфигов), обновление панели, гео-баз и шаблонов URL, пароль и вход без пароля по IP.',
     open: () => openServerUpdatesModal(),
   },
   {
@@ -1615,9 +1701,8 @@ const SETTINGS_ITEMS = [
   {
     id: 'protocols',
     title: 'Скрыть протоколы / платформы',
-    desc: 'Прячет лишние вкладки протоколов и клиентские платформы в UI. Вместе с вкладкой уходят и проверки ' +
-          'протокола в «Зависимостях» — панель перестаёт следить за его состоянием. Сервисы на сервере не ' +
-          'трогает: установка, перезапуск и удаление живут на плитке «Сервис» у самого протокола.',
+    desc: 'Прячет лишние вкладки протоколов и платформы. Скрытый протокол уходит и из «Зависимостей». ' +
+          'Сервисы на сервере не трогает.',
     open: () => openProtocolsModal(),
   },
   {
@@ -1804,6 +1889,7 @@ function openChangePasswordModal(isTemp) {
   const note = document.getElementById('passwordTempNote');
   if (note) note.classList.toggle('hidden', !isTemp);
   document.getElementById('changePasswordModal').classList.remove('hidden');
+  dirtyById('changePasswordModal', 'pwSaveBtn');
   document.getElementById('oldPasswordInput').focus();
 }
 async function submitChangePassword() {
@@ -2414,12 +2500,12 @@ function _updateFakeLoginUrlPreview() {
     urlEl.textContent = _loginUrlBase() + '/' + token;
     hint.style.color = 'var(--text3)';
     hint.innerHTML = 'Любое слово/число. Расширение <code>.html</code> в конце <b>не нужно</b> — это путь, а не файл. Разрешены: <code>A-Z a-z 0-9 . _ -</code>.';
-    btn.disabled = false;
+    dirtySetValid(btn, true);
   } else {
     urlEl.textContent = '— введите адрес —';
     hint.style.color = '#fa3';
     hint.textContent = 'Введите минимум 1 символ. Разрешены только A-Z a-z 0-9 . _ -.';
-    btn.disabled = true;
+    dirtySetValid(btn, false);
   }
   // Порт правится тем же полем, а на адрес сайта он влиять не должен —
   // обновляем и его превью, чтобы разница была видна сразу.
@@ -2483,6 +2569,7 @@ async function openFakeLandingModal() {
   if (recEl) recEl.textContent = `sed -i 's/"fake_enabled": true/"fake_enabled": false/;s/"login_block_root": true/"login_block_root": false/' ${panelRoot}/data/server.json && systemctl restart awg-panel`;
   _onFakeModeChange();
   document.getElementById('fakeLandingModal').classList.remove('hidden');
+  dirtyById('fakeLandingModal', 'fakeLandingSaveBtn');
 }
 function _fakeSelectedMode() {
   const el = document.querySelector('input[name="fakeMode"]:checked');
@@ -2535,6 +2622,9 @@ function _onFakeModeChange() {
   const filesWrap = document.getElementById('fakeFilesWrap');
   const siteBox = document.getElementById('fakeSiteUrlBox');
   if (pathWrap) pathWrap.style.display = needsKey ? '' : 'none';
+  // «Вход по IP»: правая колонка (URL входа, сайт, файлы) пуста — окно узкое.
+  const flBox = document.getElementById('fakeLandingBox');
+  if (flBox) flBox.classList.toggle('fl-single', !needsKey);
   if (urlBox) urlBox.style.display = needsKey ? '' : 'none';
   if (filesWrap) filesWrap.style.display = (mode === 'fake') ? '' : 'none';
   // Адрес сайта показываем только там, где сайт реально отдаётся.
@@ -2544,7 +2634,7 @@ function _onFakeModeChange() {
     _updateFakeLoginUrlPreview();
   } else {
     const btn = document.getElementById('fakeLandingSaveBtn');
-    if (btn) btn.disabled = false;  // в режиме «Вход по IP» ключ не нужен
+    dirtySetValid(btn, true);  // в режиме «Вход по IP» ключ не нужен
   }
 }
 function copyFakeLoginUrl() {
@@ -2613,6 +2703,7 @@ function openProfileNamingModal() {
     el.checked = (el.value === cur);
   });
   document.getElementById('profileNamingModal').classList.remove('hidden');
+  dirtyById('profileNamingModal', 'profileNamingSaveBtn');
 }
 async function submitProfileNaming() {
   const sel = document.querySelector('input[name="profileNaming"]:checked');
@@ -2714,6 +2805,7 @@ function openProtocolsModal() {
       <span>${PLAT_LABELS[id]}</span>
     </label>`).join('');
   document.getElementById('protocolsModal').classList.remove('hidden');
+  dirtyById('protocolsModal', 'protocolsSaveBtn');
 }
 async function submitProtocols() {
   const protos = Array.from(document.querySelectorAll('#protocolsList input:checked')).map(el => el.dataset.proto);
@@ -4462,8 +4554,13 @@ PROTO_SVC.xray = {
     _psvcSwitchRow('swEnableLogs', 'rowEnableLogs', 'Журнал подключений',
       'Однократная настройка access.log: в карточках клиентов появятся последний IP, страна и кнопка «Логи». ' +
       'Пишет все входы в один журнал.',
-      _xrayFlags.logs, 'onSwitchEnableLogs(this)'),
-  onMount: () => { loadXraySecurity(); loadXrayHysteria(); loadXrayXdns(); },
+      _xrayFlags.logs, 'onSwitchEnableLogs(this)') +
+    _psvcSwitchRow('swGeoipAuto', 'rowGeoipAuto', 'Полная база стран (geoip.dat)',
+      'Раз в неделю панель сама скачивает полную базу стран Loyalsoldier и ставит её, только если в ней есть ' +
+      'все страны из ваших правил и XRay принимает конфиг. Перезапуска нет — XRay и Hysteria подхватят базу ' +
+      'при следующем старте. <span id="geoipAutoInfo"></span>',
+      true, 'onSwitchGeoipAuto(this)'),
+  onMount: () => { loadXraySecurity(); loadXrayHysteria(); loadXrayXdns(); loadXrayGeoip(); },
   restartNote: 'Перезапуск рвёт соединения всех входов ядра — VLESS, Hysteria и XDNS — ' +
                'примерно на две секунды; клиенты переподключаются сами. Если панель открыта по 443 через ' +
                'фоллбек XRay, на это время она тоже станет недоступна — страница восстановится сама.',
@@ -4871,7 +4968,7 @@ function applyPlatformVisibility() {
 }
 
 // ============================================================
-// Сервер и обновления (имя сервера + панель / гео / blackmatrix7)
+// Сервер и обновления (имя сервера + панель / гео / шаблоны URL)
 // ============================================================
 let _updateInfo = null;
 async function checkForUpdates() {
@@ -5086,28 +5183,7 @@ function renderServerUpdates() {
   _suBlock('suBm7', B.local || '', B.update_available, B.remote || '',
     B.last_check, B.interval_days || cfg.bm7_check_interval_days || 7,
     B.auto !== undefined ? B.auto : cfg.bm7_auto_update !== false);
-  // Единая нижняя кнопка: «Обновить» (как «Сохранить») если есть хоть одно обновление,
-  // иначе «Проверить» (как «Закрыть»).
-  const anyAvail = [P, G, B].some(x => x && x.update_available);
-  const mb = document.getElementById('suMainBtn');
-  if (mb) {
-    mb.textContent = anyAvail ? 'Обновить' : 'Проверить';
-    mb.classList.toggle('btn-success', anyAvail);
-    mb.classList.toggle('btn-ghost', !anyAvail);
-  }
   _suCheckDirty();
-}
-
-// Единая кнопка: есть обновления → применить всё; иначе — перепроверить.
-function _suAnyAvail() {
-  return !!(_updateInfo && ['panel', 'geo', 'bm7'].some(k => _updateInfo[k] && _updateInfo[k].update_available));
-}
-async function suMainAction() {
-  if (_suAnyAvail()) return applyAllUpdates();
-  await suRecheck();
-  const offline = ['panel', 'geo', 'bm7'].every(k => !_suVersions(k).remote);
-  toast(offline ? 'Нет связи с сервером обновлений'
-                : (_suAnyAvail() ? 'Доступно обновление — нажмите «Обновить»' : 'Обновлений нет'));
 }
 
 // Проверка одного блока кнопкой на его карточке.
@@ -5202,8 +5278,6 @@ async function suSaveAll() {
 let _updateBusy = false;
 function _suSetBusy(on) {
   _updateBusy = on;
-  const mb = document.getElementById('suMainBtn');
-  if (mb) { mb.disabled = !!on; mb.style.opacity = on ? '0.55' : ''; }
   const sb = document.getElementById('suSaveBtn');
   if (sb) { sb.style.opacity = on ? '0.55' : ''; if (on) sb.disabled = true; else _suCheckDirty(); }
   // Per-блочные «Обновить»: бэкенд держит один _UPDATE_LOCK на всех, поэтому
@@ -5213,42 +5287,6 @@ function _suSetBusy(on) {
   });
 }
 
-// Одна кнопка «Обновить»: применяет всё свежее (панель + гео + blackmatrix7) одним
-// запросом; рестарт (если нужен) один в конце.
-async function applyAllUpdates() {
-  if (_updateBusy) return;
-  const LBL = {panel: 'панель', geo: 'гео-базы', bm7: 'шаблоны blackmatrix7'};
-  const items = ['panel', 'geo', 'bm7']
-    .filter(k => _updateInfo[k] && _updateInfo[k].update_available).map(k => LBL[k]);
-  const ok = await openConfirm({
-    title: 'Обновить?',
-    body: 'Будет обновлено: ' + items.join(', ') + '.\nОбновление панели или гео-баз перезапустит панель.',
-    okLabel: 'Обновить',
-  });
-  if (!ok) return;
-  _suSetBusy(true);
-  const prog = document.getElementById('suProgress');
-  prog.style.display = 'block'; prog.innerHTML = 'Запуск обновления…\n';
-  pollAuditDuringUpdate();
-  try {
-    const r = await fetch(API + '/api/update/apply-all', {method: 'POST'});
-    const j = await r.json().catch(() => ({}));
-    if (r.ok && j.ok) {
-      if (j.restart) {
-        toast('Обновление применено. Перезапуск…');
-        setTimeout(() => location.reload(), 6000);
-        return;  // не снимаем busy — идёт перезапуск
-      }
-      toast('Обновлено: ' + (j.done && j.done.length ? j.done.join(', ') : 'нет изменений'));
-      if (_updatePollTimer) clearInterval(_updatePollTimer);
-      _updateInfo = null; await checkForUpdates(); renderServerUpdates();
-    } else {
-      toast(j.error || 'Ошибка обновления');
-      if (_updatePollTimer) clearInterval(_updatePollTimer);
-    }
-  } catch (e) { toast('Ошибка: ' + e.message); if (_updatePollTimer) clearInterval(_updatePollTimer); }
-  _suSetBusy(false);
-}
 // Обновление или переустановка ОДНОГО блока (панель / гео / шаблоны). Эндпоинты
 // форсированные: панель и гео перекачиваются без сверки версий и требуют рестарта,
 // шаблоны — без рестарта (заодно тянут свои шаблоны с byfox).
@@ -5477,6 +5515,7 @@ async function loadBackupStatus() {
     document.getElementById('bkRetCount').value = cfg.retention_count || 10;
     document.getElementById('bkRetSize').value = cfg.retention_size_mb || 100;
     renderBackupList(j.items || []);
+    dirtyById('backupModal', 'bkSaveBtn');
   } catch (e) {
     toast('Не удалось загрузить статус бэкапа');
   }
@@ -5619,7 +5658,15 @@ function _powerSvg() {
   return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>';
 }
 function _calendarSvg() {
-  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg>';
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 7.5V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h3.5"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="8" y2="10"/><circle cx="16" cy="16" r="6"/><polyline points="16 14 16 16 17.5 17"/></svg>';
+}
+// «Логи» = часы со стрелкой назад (история). На ПК — текст, на телефоне — иконка
+// (.btn-logs-toggle в @media), чтобы ряд кнопок карточки влез в ширину экрана.
+function _historySvg() {
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><polyline points="3 3 3 8 8 8"/><polyline points="12 7 12 12 16 14"/></svg>';
+}
+function logsBtnHtml(onclick) {
+  return `<button class="btn btn-sm btn-ghost btn-logs-toggle" onclick="${onclick}" title="Логи" aria-label="Логи"><span class="lbl-txt">Логи</span><span class="lbl-ico">${_historySvg()}</span></button>`;
 }
 function _dnsSvg() {
   return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="3" y1="12" x2="21" y2="12"/><path d="M12 3a14 14 0 0 1 0 18"/><path d="M12 3a14 14 0 0 0 0 18"/></svg>';
@@ -5695,7 +5742,8 @@ function trashBtnHtml(onclick) {
   return `<button class="btn-act danger" onclick="${onclick}" title="Удалить" aria-label="Удалить">${_trashSvg()}</button>`;
 }
 function powerBtnHtml(onclick, disabled) {
-  const cls = disabled ? 'btn-act is-active' : 'btn-act';
+  // btn-power: на телефоне кнопка уезжает в правый верхний угол карточки (CSS).
+  const cls = disabled ? 'btn-act btn-power is-active' : 'btn-act btn-power';
   const title = disabled ? 'Включить' : 'Отключить';
   return `<button class="${cls}" onclick="${onclick}" title="${title}" aria-label="${title}">${_powerSvg()}</button>`;
 }
@@ -5753,6 +5801,7 @@ async function openDnsModal(kind, id, name) {
   document.getElementById('dnsBulkRow').classList.remove('hidden');
   _dnsFillForm(dns);
   document.getElementById('dnsModal').classList.remove('hidden');
+  dirtyById('dnsModal', 'dnsApplyBtn');
 }
 
 function _dnsTemplateOptionsHtml(selId) {
@@ -6048,6 +6097,9 @@ function openAllowIpModal(id, name, kind) {
   _allowIpTarget = {id, name, kind, lastIp: (c && c.last_ip) || ''};
   _allowIpList = ((c && c.allow_ips) || []).slice();
   _blockIpList = ((c && c.block_ips) || []).slice();
+  _allowIpBase = JSON.stringify([_allowIpList, _blockIpList]);
+  const _m = document.getElementById('allowIpModal');
+  if (_m && !_m._ipSync) { _m.addEventListener('input', _allowIpSyncSave); _m._ipSync = 1; }
   document.getElementById('allowIpClientName').textContent = name || '';
   ['allow', 'block'].forEach(k => {
     _allowIpEl('allowIpInput', k).value = '';
@@ -6214,7 +6266,19 @@ function _allowIpEditCommit(el, kind, idx) {
   _allowIpSetErr('', kind);
 }
 
+// «Сохранить» горит, только если списки отличаются от открытых или в поле ввода
+// остался не добавленный адрес (его сохранение тоже подхватит).
+let _allowIpBase = '';
+function _allowIpSyncSave() {
+  const b = document.getElementById('allowIpSaveBtn');
+  if (!b) return;
+  const pend = ['allow', 'block'].some(k => ((_allowIpEl('allowIpInput', k) || {}).value || '').trim());
+  const dirty = pend || JSON.stringify([_allowIpList, _blockIpList]) !== _allowIpBase;
+  b.disabled = !dirty;
+  b.title = dirty ? '' : 'Изменений нет';
+}
 function _allowIpRender(kind) {
+  queueMicrotask(_allowIpSyncSave);
   kind = kind === 'block' ? 'block' : 'allow';
   const list = _allowIpArr(kind);
   const box = _allowIpEl('allowIpList', kind);
@@ -7499,7 +7563,7 @@ function renderGlobalRulesCard() {
         </div>
         <div class="peer-actions">
           ${applyBtn}
-          <button class="btn btn-sm btn-ghost" onclick="openGlobalLogs()">Логи</button>
+          ${logsBtnHtml('openGlobalLogs()')}
           <button class="btn-act" onclick="refreshGlobalRules()" title="Перекачать списки правил с источников и применить заново. Это не перезапуск сервиса — меняется только содержимое правил." aria-label="Перекачать списки правил">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/></svg>
           </button>
@@ -7753,7 +7817,7 @@ function renderXrayClients(clients) {
         <div class="peer-actions">
           ${geoDirty ? `<button class="btn btn-sm btn-success" onclick="applyClientGeo('${uuidAttr}')" title="Применить изменения правил">Применить</button>` : ''}
           <button class="btn btn-sm btn-ghost" onclick="showXrayConfig('${uuidAttr}')">Конфиг</button>
-          <button class="btn btn-sm btn-ghost" onclick="openXrayLogs('${uuidAttr}')">Логи</button>
+          ${logsBtnHtml(`openXrayLogs('${uuidAttr}')`)}
           ${dnsCfgBtnHtml(`openDnsModal('xray','${uuidAttr}','${nameAttr}')`, _dnsIconState(c), _dnsIconTitle(_dnsIconState(c)))}
           ${allowIpBtnHtml(`openAllowIpModal('${uuidAttr}','${nameAttr}')`, ((c.allow_ips || []).length + (c.block_ips || []).length) > 0, 'Фильтрация по IP (зелёный = список задан)')}
           ${pencilBtnHtml(`showXrayRename('${uuidAttr}','${nameAttr}')`)}
@@ -7822,6 +7886,40 @@ async function onSwitchEnableStats(el) {
     return;
   }
   await enableXrayStats();
+}
+
+// Полная база стран geoip.dat — вкладка «Ядро XRay». Тумблер сохраняется сразу.
+function _renderGeoipAuto(j) {
+  const sw = document.getElementById('swGeoipAuto');
+  const info = document.getElementById('geoipAutoInfo');
+  if (!sw || !j) return;
+  sw.checked = !!j.auto;
+  const row = document.getElementById('rowGeoipAuto');
+  if (row) row.classList.toggle('is-on', !!j.auto);
+  if (!info) return;
+  const bits = [];
+  if (j.codes) bits.push(`<span>Сейчас в базе кодов: ${j.codes}</span>`);
+  if (j.updated) bits.push(`<span>обновлена ${_fmtServerTs(j.updated, true)}</span>`);
+  info.innerHTML = bits.length ? bits.join(' · ') + '.' : '';
+  if (j.error) info.innerHTML += ` <span style="color:var(--orange);">Последняя попытка: ${escHtml(j.error)}</span>`;
+}
+async function loadXrayGeoip() {
+  try {
+    const r = await fetch(API + '/api/xray/geoip');
+    const j = await r.json();
+    if (j.ok) _renderGeoipAuto(j);
+  } catch (_) {}
+}
+async function onSwitchGeoipAuto(el) {
+  try {
+    const r = await fetch(API + '/api/xray/geoip', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({auto: el.checked}),
+    });
+    const j = await r.json();
+    if (!j.ok) { toast(j.error || 'Не сохранено'); el.checked = !el.checked; return; }
+    _renderGeoipAuto(j);
+    if (el.checked) toast('Проверяю свежую базу стран в фоне');
+  } catch (_) { toast('Сеть: не сохранено'); el.checked = !el.checked; }
 }
 
 async function onSwitchEnableLogs(el) {
@@ -8610,6 +8708,11 @@ function _paintFirewall() {
       <div class="fw-sec-h"><span>Блокировки (fail2ban)</span></div>
       ${f2bHtml}
     </div>`;
+  // «Сохранить» у jail — только когда цифры поменяли.
+  box.querySelectorAll('.fw-form').forEach(f => {
+    const b = f.querySelector('button[onclick^="fwSaveJail"]');
+    if (b) dirtyTrack(f, b);
+  });
 }
 
 async function _fwPost(url, body) {
@@ -10728,6 +10831,7 @@ function _openMtgRecipientModal(mode, id, currentName) {
   const input = document.getElementById('mtgRecipientInput');
   input.value = currentName || '';
   document.getElementById('mtgRecipientModal').classList.remove('hidden');
+  dirtyById('mtgRecipientModal', 'mtgRecipientSaveBtn');
   setTimeout(() => { input.focus(); input.select(); }, 30);
 }
 
@@ -12083,6 +12187,9 @@ function startEditRuleList(platform, id) {
   if (!row) return;
   _setRowMode(row, true);
   _editingRow = row;
+  // «Сохранить» — только при правках в форме списка.
+  const edit = row.querySelector('.rml-edit');
+  if (edit) dirtyTrack(edit, edit.querySelector('button[onclick^="saveEditRuleList"]'));
   const nameInput = row.querySelector('[data-edit-name]');
   if (nameInput) nameInput.focus();
 }
@@ -12893,6 +13000,9 @@ function mhProfModalReset(title, okLabel) {
   document.getElementById('mhProfTitle').textContent = title;
   document.getElementById('mhProfSaveBtn').textContent = okLabel;
   document.getElementById('mihomoProfileModal').classList.remove('hidden');
+  // Правка профиля — «Сохранить» только при изменениях; новый профиль — «Добавить» как есть.
+  if (okLabel === 'Сохранить') dirtyById('mihomoProfileModal', 'mhProfSaveBtn');
+  else dirtyUntrack(document.getElementById('mhProfSaveBtn'));
 }
 
 function mhOpenAddProfile() {
@@ -13669,6 +13779,7 @@ async function _sdnsLoad(fillInputs) {
     document.getElementById('sdnsFb').value = j.settings.fallback || '';
     document.getElementById('sdnsShowBtn').checked = j.settings.show_button !== false;
     document.getElementById('sdnsAutoFo').checked = j.settings.auto_failover !== false;
+    document.getElementById('sdnsAutoUpd').checked = j.settings.auto_update !== false;
     _sdnsParsed = {main: j.main || [], fallback: j.fallback || []};
     _sdnsRenderParsed();
     _sdnsRenderChips();
@@ -13698,6 +13809,7 @@ async function _sdnsSaveButton() {
   const body = {
     show_button: document.getElementById('sdnsShowBtn').checked,
     auto_failover: document.getElementById('sdnsAutoFo').checked,
+    auto_update: document.getElementById('sdnsAutoUpd').checked,
   };
   try {
     const r = await fetch(API + '/api/server-dns/button', {
@@ -13710,12 +13822,25 @@ async function _sdnsSaveButton() {
   } catch (_) { toast('Сеть: не сохранено'); }
 }
 
+// Итог операции — крупной плашкой сверху: человеку нужно сразу видеть «всё
+// заработало, можно закрывать» или «не вышло». Детали — под плашкой, шаги свёрнуты.
+function _sdnsBanner(kind, title, sub) {
+  const mk = {ok: '✓', bad: '✗', warn: '⚠'}[kind] || '';
+  return `<div class="sdns-banner ${kind}"><span class="sdns-banner-mk">${mk}</span>` +
+         `<div><div class="sdns-banner-t">${title}</div>` +
+         (sub ? `<div class="sdns-banner-s">${sub}</div>` : '') + '</div></div>';
+}
+
+function _sdnsSpeed(ms) {
+  return ms < 2 ? 'отвечает мгновенно (из кеша)' : `отвечает за ${ms} мс`;
+}
+
 function _sdnsProbeHtml(label, p) {
   if (!p) return '';
   if (!p.ok) {
     return `<div class="dns-check-line bad"><span class="mk">✗</span><b>${label}</b>: <span class="st">${escHtml(p.error || 'нет ответа')}</span></div>`;
   }
-  const bits = [`<span>отвечает за ${p.ms} мс</span>`];
+  const bits = [`<span>${_sdnsSpeed(p.ms)}</span>`];
   bits.push(p.ads ? '<span class="ads">режет рекламу</span>' : '<span>рекламу не режет</span>');
   if (p.adult) bits.push('<span class="ads">фильтр 18+</span>');
   let h = `<div class="dns-check-line ok"><span class="mk">✓</span><b>${label}</b>: ${bits.join(' · ')}</div>`;
@@ -13729,16 +13854,33 @@ function _sdnsProbeHtml(label, p) {
 function _sdnsResultHtml(job) {
   const r = job.result || {};
   if (job.kind === 'check') {
-    return _sdnsProbeHtml('Основной DNS', r.main) + (r.fallback ? _sdnsProbeHtml('Запасной DNS', r.fallback) : '') +
-      '<div class="dns-check-foot">Проверено с сервера пробным запуском dnsproxy — так же, как он будет работать.</div>';
+    const okMain = r.main && r.main.ok;
+    const fbBad = r.fallback && !r.fallback.ok;
+    const enabled = !!(_sdns && _sdns.settings && _sdns.settings.enabled);
+    let h = okMain
+      ? (fbBad
+          ? _sdnsBanner('warn', 'Основной DNS отвечает, запасной — нет', 'Запасной не поможет при сбое — проверьте его адрес или очистите поле.')
+          : _sdnsBanner('ok', 'DNS отвечает', enabled ? 'Нажмите «Применить», чтобы сервер перешёл на него.'
+                                                      : 'Нажмите «Применить», чтобы сервер начал им пользоваться.'))
+      : _sdnsBanner('bad', 'DNS не ответил', 'С таким адресом сервер остался бы без DNS — «Применить» ничего не изменит, пока он не ответит.');
+    h += _sdnsProbeHtml('Основной DNS', r.main) + (r.fallback ? _sdnsProbeHtml('Запасной DNS', r.fallback) : '');
+    return h;
   }
   if (job.kind === 'disable') {
-    return '<div class="dns-check-line ok"><span class="mk">✓</span><span>DNS сервера выключен — сервер снова ходит в DNS хостера.</span></div>';
+    return _sdnsBanner('ok', 'Свой DNS выключен', 'Сервер снова ходит в DNS хостера. Окно можно закрыть.');
   }
   // apply / verify
-  let h = '';
-  if (job.kind === 'apply') {
-    h += '<div class="dns-check-line ok"><span class="mk">✓</span><span>Готово: сервер резолвит через выбранный DNS.</span></div>';
+  const extra = r.extra_dns && r.extra_dns.length;
+  const fine = r.direct && r.direct.ok && !r.leak && !extra;
+  let h;
+  if (fine) {
+    h = job.kind === 'apply'
+      ? _sdnsBanner('ok', 'Готово — свой DNS работает', 'Сервер резолвит весь трафик через выбранный DNS. Окно можно закрыть.')
+      : _sdnsBanner('ok', 'Всё работает', 'Свой DNS отвечает, и сервер ходит через него.');
+  } else if (r.direct && r.direct.ok) {
+    h = _sdnsBanner('warn', 'Свой DNS работает, но есть замечание', 'Подробности ниже.');
+  } else {
+    h = _sdnsBanner('bad', 'Свой DNS не отвечает', 'Подробности ниже.');
   }
   h += _sdnsProbeHtml('DNS сервера', r.direct);
   if (r.system_egress_ip) {
@@ -13748,7 +13890,7 @@ function _sdnsResultHtml(job) {
   if (r.leak) {
     h += '<div class="dns-check-line warn"><span class="mk">⚠</span><span class="st">Система резолвит не через тот же DNS — часть запросов идёт мимо.</span></div>';
   }
-  if (r.extra_dns && r.extra_dns.length) {
+  if (extra) {
     h += '<div class="dns-check-line warn"><span class="mk">⚠</span><span class="st">Кроме 127.0.0.2 у системы есть ещё DNS — при сбое запросы уйдут туда:</span> ' +
          escHtml(r.extra_dns.join(', ')) + '</div>';
   }
@@ -13758,7 +13900,7 @@ function _sdnsResultHtml(job) {
 function _sdnsErrorHtml(msg) {
   const lines = String(msg || '').split('\n');
   const head = lines.shift();
-  let h = `<div class="dns-check-line bad"><span class="mk">✗</span><span class="st">${escHtml(head)}</span></div>`;
+  let h = _sdnsBanner('bad', 'Не получилось', `<span>${escHtml(head)}</span>`);
   const tail = lines.join('\n').trim();
   if (tail) {
     h += `<details class="dns-check-sub"><summary>Подробности</summary>` +
@@ -13770,13 +13912,15 @@ function _sdnsErrorHtml(msg) {
 function _sdnsRenderJob(job) {
   const out = document.getElementById('sdnsOut');
   out.classList.remove('hidden');
-  let h = (job.steps || []).map((s, i, a) => {
+  const steps = (job.steps || []).map((s, i, a) => {
     const last = i === a.length - 1 && job.state === 'running';
     return `<div class="dns-check-line step"><span class="mk">${last ? '…' : '·'}</span><span>${escHtml(s)}</span></div>`;
   }).join('');
-  if (job.state === 'done') h += _sdnsResultHtml(job);
-  if (job.state === 'error') h += _sdnsErrorHtml(job.error);
+  if (job.state === 'running') { out.innerHTML = steps; return; }
+  let h = job.state === 'done' ? _sdnsResultHtml(job) : _sdnsErrorHtml(job.error);
+  if (steps) h += `<details class="sdns-steps"><summary>Что сделано</summary>${steps}</details>`;
   out.innerHTML = h;
+  try { out.scrollIntoView({block: 'nearest', behavior: 'smooth'}); } catch (_) {}
 }
 
 async function _sdnsPoll() {
