@@ -12140,6 +12140,7 @@ try:
         '_save_server_config': _save_server_config,
         'apply_xray_dns': apply_xray_dns,
         'asn_lookup': asn_lookup,
+        'geoip_lookup': geoip_lookup,
         '_github_latest_tag': _github_latest_tag,
         'SERVER_CFG': SERVER_CFG,
         'DATA_DIR': DATA_DIR,

@@ -4977,7 +4977,7 @@ async function checkForUpdates() {
     if (!r.ok) return;
     _updateInfo = await r.json();
     if (_updateInfo.geo && _updateInfo.geo.remote) {
-      document.getElementById('brandGeoVersion').textContent = 'geo ' + _updateInfo.geo.remote;
+      document.getElementById('brandGeoVersion').textContent = 'geo ' + _suGeoDate(_updateInfo.geo.remote);
     }
     // Уведомляем в подвале только если есть обновление с ВЫКЛЮЧЕННЫМ авто-свитчем.
     // Включённый свитч = тихое авто-обновление, дёргать юзера не нужно.
@@ -5209,7 +5209,7 @@ async function suRecheck(touch = '1') {
       answered = true;
       _updateInfo = await r.json();
       if (_updateInfo.geo && _updateInfo.geo.remote)
-        document.getElementById('brandGeoVersion').textContent = 'geo ' + _updateInfo.geo.remote;
+        document.getElementById('brandGeoVersion').textContent = 'geo ' + _suGeoDate(_updateInfo.geo.remote);
       const needsAttention = ['panel', 'geo', 'bm7'].some(k =>
         _updateInfo[k] && _updateInfo[k].update_available && !_updateInfo[k].auto);
       document.getElementById('updateBtn').classList.toggle('hidden', !needsAttention);
@@ -13790,18 +13790,257 @@ async function _sdnsLoad(fillInputs) {
   return j;
 }
 
-async function openServerDnsModal() {
+// Свой DNS включён — окно открывается на «Статистике»: ради неё кнопку в шапке
+// и жмут. tab='set' — сразу настройки (ссылка из DNS клиента).
+async function openServerDnsModal(tab) {
   document.getElementById('serverDnsModal').classList.remove('hidden');
+  // Включён ли DNS, до ответа сервера знаем по прошлой загрузке или по кнопке
+  // в шапке (она видна только у включённого) — иначе окно мигнуло бы настройками.
+  const btn = document.getElementById('srvDnsBtn');
+  const seemsOn = (_sdb && _sdb.enabled) || (btn && !btn.classList.contains('hidden'));
+  const wantStat = tab !== 'set';
+  document.getElementById('sdnsTabs').classList.toggle('hidden', !seemsOn);
+  _sdnsTab(wantStat && seemsOn ? 'stat' : 'set');
   const out = document.getElementById('sdnsOut');
   out.classList.add('hidden');
   out.innerHTML = '';
   try {
     const j = await _sdnsLoad(true);
-    if (j.job && j.job.state === 'running') _sdnsPoll();
+    const running = j.job && j.job.state === 'running';
+    if (running) _sdnsPoll();
+    _sdbLoad(wantStat && !running);
   } catch (e) {
     document.getElementById('sdnsStatus').innerHTML =
       `<b>Не удалось загрузить настройки DNS</b> — <span>${escHtml(e.message)}</span>`;
   }
+}
+
+// === Статистика DNS сервера (server_dns_stats.py) ============================
+// Карточки в стиле AdGuard: итог плашками, «Типы запросов», «Заблокированные
+// домены», «Топ доменов», «Топ компаний», «Топ стран», «Топ клиентов». Сервер
+// отдаёт суммы по дням и готовые списки за сегодня / 7 / 30 дней — период
+// переключается без запроса. Списки прокручиваются внутри своей карточки.
+let _sdb = null;
+let _sdbRng = 7;
+// Выбранный клиент («proto:имя») и его данные: клик по строке «Топ клиентов»
+// переключает все карточки на него, повторный клик — обратно на весь сервер.
+let _sdbSel = null, _sdbC = null, _sdbClList = [];
+try { _sdbRng = +localStorage.getItem('awgPanel:sdbRange') || 7; } catch (_) {}
+
+function _sdbFmt(n) {
+  n = n || 0;
+  if (n >= 1e6) return (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
+  if (n >= 1e4) return (n / 1e3).toFixed(1).replace(/\.0$/, '') + 'k';
+  return n.toLocaleString('ru-RU');
+}
+function _sdbYmd(t) {
+  const d = new Date(t);
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+function _sdbPct(part, whole) {
+  return whole ? Math.round(part / whole * 100) + '%' : '';
+}
+// Страна по коду — на языке панели (Intl), без своего справочника.
+function _sdbCountry(cc) {
+  try {
+    const lang = (localStorage.getItem('awgPanel:lang') || document.documentElement.lang || 'ru').slice(0, 2);
+    return new Intl.DisplayNames([lang === 'en' ? 'en' : 'ru'], {type: 'region'}).of(cc) || cc;
+  } catch (_) { return cc; }
+}
+
+// openStat — открыть «Статистику», если DNS включён (первая загрузка окна).
+async function _sdbLoad(openStat) {
+  const box = document.getElementById('sdbBox');
+  if (!box) return;
+  try {
+    const r = await fetch(API + '/api/server-dns/blocked');
+    const j = await r.json();
+    if (!r.ok || j.error) throw new Error(j.error || ('HTTP ' + r.status));
+    _sdb = j;
+  } catch (e) {
+    _sdb = null;
+    box.classList.add('hidden');
+    return;
+  }
+  box.classList.toggle('hidden', !_sdb.enabled);
+  // Вкладки есть, только пока DNS сервера включён: выключенному считать нечего.
+  document.getElementById('sdnsTabs').classList.toggle('hidden', !_sdb.enabled);
+  if (!_sdb.enabled) _sdnsTab('set');
+  else if (openStat && !_sdnsPolling) _sdnsTab('stat');
+  if (_sdb.enabled && _sdbSel) await _sdbLoadClient(_sdbSel);
+  if (_sdb.enabled) _sdbPaint();
+}
+
+async function _sdbLoadClient(key) {
+  try {
+    const r = await fetch(API + '/api/server-dns/blocked?client=' + encodeURIComponent(key));
+    const j = await r.json();
+    if (!r.ok || j.error) throw new Error(j.error || ('HTTP ' + r.status));
+    _sdbC = j;
+  } catch (e) {
+    _sdbSel = _sdbC = null;
+    toast('Не удалось загрузить статистику клиента');
+  }
+}
+
+function _sdbUnpick() {
+  _sdbSel = _sdbC = null;
+  _sdbPaint();
+}
+
+async function _sdbPick(i) {
+  const row = _sdbClList[i];
+  if (!row) return;
+  const key = row[0] + ':' + row[1];
+  if (_sdbSel === key) {
+    _sdbSel = _sdbC = null;
+  } else {
+    _sdbSel = key;
+    await _sdbLoadClient(key);
+  }
+  _sdbPaint();
+}
+
+// Вкладки окна DNS: «Настройки» и «Статистика».
+function _sdnsTab(kind) {
+  const stat = kind === 'stat';
+  document.getElementById('sdnsTabSet').classList.toggle('active', !stat);
+  document.getElementById('sdnsTabStat').classList.toggle('active', stat);
+  document.getElementById('sdnsPaneSet').classList.toggle('hidden', stat);
+  document.getElementById('sdnsPaneStat').classList.toggle('hidden', !stat);
+  document.querySelector('#serverDnsModal .sdns-modal').classList.toggle('on-stat', stat);
+}
+
+function _sdbRange(n) {
+  _sdbRng = n;
+  try { localStorage.setItem('awgPanel:sdbRange', String(n)); } catch (_) {}
+  _sdbPaint();
+}
+
+function _sdbRows(el, rows, empty) {
+  document.getElementById(el).innerHTML = rows.length ? rows.join('') : `<div class="sdb-empty">${empty}</div>`;
+}
+
+function _sdbPaint() {
+  const g = _sdb;
+  if (!g) return;
+  const rng = [1, 7, 30].includes(_sdbRng) ? _sdbRng : 7;
+  // По клиенту — его соединения из журналов; «Топ клиентов» всегда общий.
+  const one = _sdbSel && _sdbC ? _sdbC : null;
+  const d = one ? Object.assign({}, g, {days: one.days, ranges: one.ranges, now: one.now || g.now}) : g;
+  const R = (d.ranges || {})[String(rng)] || {};
+  const PROTO = {xray: 'XRay', hy: 'Hysteria'};
+  const selRow = one ? _sdbSel.split(':') : null;
+  document.getElementById('sdbSel').innerHTML = one
+    ? `<span>Клиент:</span> <b>${escHtml(_sdbSel.slice(selRow[0].length + 1))}</b> <span class="sdb-proto">${PROTO[selRow[0]] || selRow[0]}</span>` +
+      `<button type="button" class="sdb-sel-x" onclick="_sdbUnpick()" title="Вернуться к статистике всего сервера" aria-label="Вернуться к статистике всего сервера">✕</button>`
+    : '';
+  document.getElementById('sdbSel').classList.toggle('hidden', !one);
+  document.getElementById('sdbTotalL').textContent = one ? 'Соединений' : 'Всего запросов';
+  document.getElementById('sdbTotalD').textContent = one ? 'к доменам' : 'к DNS сервера';
+  document.getElementById('sdbShareD').textContent = one ? 'от соединений' : 'от всех запросов';
+  document.querySelectorAll('#sdbSeg button').forEach(b => b.classList.toggle('on', +b.dataset.r === rng));
+  const since = d.since ? d.since.split('-').reverse().join('.') : '';
+  document.getElementById('sdbSub').textContent =
+    (d.provider ? d.provider + ' · ' : '') + (since ? 'считается с ' + since : 'счёт ещё не начался');
+  document.getElementById('sdbWarn').innerHTML = d.log_ok === false
+    ? '<div class="sdb-warn"><b>Счёт остановлен:</b> журнал dnsproxy не читается — скорее всего, после обновления dnsproxy поменялся формат записей. Цифры ниже — до остановки, DNS при этом работает. Напишите автору панели.</div>'
+    : '';
+  document.getElementById('sdbTopOn').checked = d.stats_top !== false;
+
+  // --- итог плашками: суммы по дням периода и сравнение с прошлым таким же ---
+  const now = (d.now || Date.now() / 1000) * 1000;
+  const day = i => (d.days || {})[_sdbYmd(now - i * 86400e3)];
+  let Q = 0, B = 0, A = 0, X = 0, pb = 0, havePrev = false, pk = null;
+  for (let i = 0; i < rng; i++) {
+    const v = day(i);
+    if (!v) continue;
+    Q += v.q; A += v.b; X += v.x;
+    if (!pk || v.b + v.x > pk.n) pk = {n: v.b + v.x, t: now - i * 86400e3};
+  }
+  B = A + X;
+  for (let i = rng; i < rng * 2; i++) {
+    const v = day(i);
+    if (v) { pb += v.b + v.x; havePrev = true; }
+  }
+  document.getElementById('sdbTotal').textContent = _sdbFmt(Q);
+  document.getElementById('sdbBlocked').textContent = _sdbFmt(B);
+  let delta = rng === 1 ? 'за сегодня' : 'сравнить пока не с чем';
+  if (havePrev && pb > 0) {
+    const ch = (B - pb) / pb * 100;
+    delta = `<span class="${ch > 0 ? 'up' : 'dn'}">${ch > 0 ? '▲ +' : '▼ −'}${Math.abs(ch).toFixed(0)}%</span> ` +
+      (rng === 1 ? 'ко вчера' : `к прошлым ${rng} дн.`);
+  }
+  document.getElementById('sdbBlockedD').innerHTML = delta;
+  document.getElementById('sdbShare').textContent = Q ? (B / Q * 100).toFixed(1) + '%' : '—';
+  document.getElementById('sdbPeak').textContent = pk && pk.n ? _sdbFmt(pk.n) : '—';
+  const pd = pk && pk.n ? new Date(pk.t) : null;
+  document.getElementById('sdbPeakD').textContent =
+    pd ? String(pd.getDate()).padStart(2, '0') + '.' + String(pd.getMonth() + 1).padStart(2, '0') : '';
+
+  // --- Типы запросов ---
+  const allowed = Math.max(0, Q - B);
+  _sdbRows('sdbTypes', [
+    ['var(--orange)', 'Реклама и трекеры', A, 'Провайдер ответил 0.0.0.0'],
+    ['#a78bfa', '18+ и вредоносное', X, 'Провайдер ответил адресом своей страницы-заглушки'],
+    ['var(--green)', one ? 'Без блокировки' : 'Разрешено', allowed, ''],
+  ].map(([c, n, v, h]) => `<div class="sdb-row sdb-r2"${h ? ` title="${h}"` : ''}><span class="sdb-dot" style="background:${c}"></span>` +
+    `<span class="nm">${n}</span><span class="v">${_sdbFmt(v)}</span><span class="pc">${_sdbPct(v, Q)}</span></div>`), '');
+
+  const noNames = d.stats_top === false ? 'Домены не запоминаются — включите «запоминать домены» вверху.' : '';
+
+  // --- Заблокированные домены ---
+  const bl = R.blocked || [];
+  document.getElementById('sdbBlkCnt').textContent = bl.length ? '· ' + (R.blocked_count || bl.length).toLocaleString('ru-RU') : '';
+  _sdbRows('sdbBlk', bl.map(([n, c, x], i) =>
+    `<div class="sdb-row sdb-r2"><span class="n">${i + 1}</span><span class="nm mono${x * 2 >= c && x ? ' x' : ''}" title="${escAttr(n)}">${escHtml(n)}</span>` +
+    `<span class="blk">${_sdbFmt(c)}</span><span class="pc"></span></div>`),
+    noNames || 'За этот период ничего не заблокировано.');
+
+  // --- Топ доменов: всего / заблокировано / (доля) ---
+  const dm = R.domains || [];
+  document.getElementById('sdbDomCnt').textContent = dm.length ? '· ' + (R.domains_count || dm.length).toLocaleString('ru-RU') : '';
+  _sdbRows('sdbDom', dm.map(([n, t, b]) =>
+    `<div class="sdb-row sdb-r3"><span class="nm mono" title="${escAttr(n)}">${escHtml(n)}</span>` +
+    `<span class="tot">${_sdbFmt(t)}</span><span class="blk">${_sdbFmt(b)}</span><span class="pc">(${_sdbPct(b, t) || '0%'})</span></div>`),
+    noNames || 'Запросов пока не было.');
+
+  // --- Топ компаний ---
+  _sdbRows('sdbComp', (R.companies || []).map(([n, l, c, t, b]) =>
+    `<div class="sdb-row sdb-r3i"><span class="sdb-ic" style="background:${c}">${escHtml(l)}</span>` +
+    `<span class="nm">${escHtml(n || 'Другие')}</span><span class="tot">${_sdbFmt(t)}</span><span class="blk">${_sdbFmt(b)}</span>` +
+    `<span class="pc">(${_sdbPct(b, t) || '0%'})</span></div>`),
+    noNames || 'Запросов пока не было.');
+
+  // --- Топ стран: куда уходили запросы (GeoIP адреса из ответа) ---
+  const cn = R.countries || [];
+  const cnT = cn.reduce((s, r) => s + r[1], 0);
+  _sdbRows('sdbCnt', cn.map(([cc, n]) =>
+    `<div class="sdb-row sdb-r2i"><span class="sdb-ic sdb-cc">${escHtml(cc)}</span><span class="nm">${escHtml(_sdbCountry(cc))}</span>` +
+    `<span class="tot">${_sdbFmt(n)}</span><span class="pc">${_sdbPct(n, cnT)}</span></div>`),
+    'Пока нет данных.');
+
+  // --- Топ клиентов: соединения из журналов XRay/Hysteria (всегда общий список) ---
+  const src = (g.clients_src || []).map(p => PROTO[p] || p);
+  _sdbClList = ((g.ranges || {})[String(rng)] || {}).clients || [];
+  _sdbRows('sdbCl', _sdbClList.map(([p, n, t, b], i) =>
+    `<div class="sdb-row sdb-r3 sdb-click${_sdbSel === p + ':' + n ? ' on' : ''}" onclick="_sdbPick(${i})" title="Показать статистику этого клиента (повторный клик — весь сервер)">` +
+    `<span class="nm">${escHtml(n)} <span class="sdb-proto">${PROTO[p] || p}</span></span>` +
+    `<span class="tot">${_sdbFmt(t)}</span><span class="blk">${_sdbFmt(b)}</span><span class="pc">(${_sdbPct(b, t) || '0%'})</span></div>`),
+    src.length ? 'Соединений клиентов к доменам пока не было.' : 'Нет журнала XRay или Hysteria — включите журнал в настройках протокола.');
+}
+
+async function _sdbTopToggle() {
+  const on = document.getElementById('sdbTopOn').checked;
+  try {
+    const r = await fetch(API + '/api/server-dns/button', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({stats_top: on}),
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    toast(on ? 'Домены снова запоминаются' : 'Домены больше не запоминаются, накопленные стёрты');
+  } catch (_) { toast('Сеть: не сохранено'); }
+  _sdbLoad();
 }
 
 // Тумблеры, которые систему не трогают, сохраняются сразу: кнопка в шапке и авто-откат.
@@ -13926,6 +14165,7 @@ function _sdnsRenderJob(job) {
 async function _sdnsPoll() {
   if (_sdnsPolling) return;
   _sdnsPolling = true;
+  _sdnsTab('set');     // ход операции и её итог — на вкладке настроек
   _sdnsDirty();
   document.getElementById('sdnsCheckBtn').disabled = true;
   let misses = 0, job = null;
@@ -13952,6 +14192,7 @@ async function _sdnsPoll() {
   }
   if (job && job.kind !== 'check' && job.kind !== 'verify') {
     try { await _sdnsLoad(job.state === 'done'); } catch (_) {}
+    _sdbLoad();
     try { refreshAuditStrip(); } catch (_) {}
   }
   _sdnsDirty();

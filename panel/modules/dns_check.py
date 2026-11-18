@@ -145,9 +145,9 @@ def _dot(host, name):
 
 
 def _free_port():
-    with socket.socket() as s:
-        s.bind(('127.0.0.1', 0))
-        return s.getsockname()[1]
+    # Вне диапазона порт-хоппинга Hysteria (его правило перехватывает локальный UDP).
+    from .local_ports import free_port
+    return free_port()
 
 
 def _mihomo_ns(url):

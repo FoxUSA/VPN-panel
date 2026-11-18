@@ -1123,6 +1123,21 @@ body::before {
   padding: 12px 0 0;
   margin-top: -4px;
 }
+/* Окна с вкладками: размер окна не зависит от открытой вкладки. Высота задана
+   жёстко — короткая вкладка не сжимает окно, длинная листается внутри, «Закрыть»
+   всегда внизу. Своя высота окна — через --tabbed-h. Детей не сжимать: у
+   .cfg-tabs overflow:hidden, и flex раздавил бы ряд вкладок до нуля. */
+.modal:has(> .cfg-tabs), .modal.psvc-modal:has(.psvc-tabs) {
+  height: min(85vh, var(--tabbed-h, 860px));
+  display: flex;
+  flex-direction: column;
+}
+.modal:has(> .cfg-tabs) > *, .modal.psvc-modal:has(.psvc-tabs) > * { flex-shrink: 0; }
+/* Низ окна (.modal-actions или свой ряд кнопок) — последний ребёнок, прижат вниз. */
+.modal:has(> .cfg-tabs) > :last-child,
+.modal.psvc-modal:has(.psvc-tabs) > :last-child { margin-top: auto; }
+/* Настройки XRay: тело окна само листается — оно и занимает всю высоту. */
+.modal.psvc-modal:has(.psvc-tabs) > #protoSvcBody { flex: 1 1 auto; min-height: 0; max-height: none !important; }
 .modal-xwide *, .modal-wide * { box-sizing: border-box; }
 .modal-xwide input[type="text"],
 .modal-xwide textarea { max-width: 100%; }
@@ -3661,6 +3676,13 @@ code.tpl-chip, .tpl-info-head code { font-family: 'JetBrains Mono', monospace; }
       </label>
     </div>
 
+    <!-- Вкладка «Статистика» видна, пока DNS сервера включён (_sdbLoad). -->
+    <div class="cfg-tabs hidden" id="sdnsTabs">
+      <button type="button" class="cfg-tab" id="sdnsTabStat" onclick="_sdnsTab('stat')">Статистика</button>
+      <button type="button" class="cfg-tab active" id="sdnsTabSet" onclick="_sdnsTab('set')">Настройки</button>
+    </div>
+
+    <div id="sdnsPaneSet">
     <div class="dns-info">
       Через этот резолвер сервер резолвит <b>всё, что через него идёт:</b> VPN-трафик XRay (VLESS, XDNS), Hysteria, mtg и саму панель. Пока он выключен, это DNS хостера, и хостер видит все домены. DNS в конфигах клиентов — отдельно, в Global DNS у XRay.
     </div>
@@ -3708,6 +3730,64 @@ code.tpl-chip, .tpl-info-head code { font-family: 'JetBrains Mono', monospace; }
     </label>
 
     <div id="sdnsOut" class="dns-check hidden"></div>
+    </div>
+
+    <div id="sdnsPaneStat" class="hidden">
+    <!-- Статистика (server_dns_stats.py): карточки, списки прокручиваются внутри. Видна, пока DNS сервера включён. -->
+    <div id="sdbBox" class="sdb hidden">
+      <div class="sdb-h">
+        <span id="sdbSub" class="sdb-sub"></span>
+        <label class="switch-row sdb-top-sw" title="Хранятся только имена доменов и счётчики за день, без времени и без клиента. Выключите — накопленные имена сотрутся, останутся только числа.">
+          <span class="switch switch-tinted"><input type="checkbox" id="sdbTopOn" onchange="_sdbTopToggle()"><span class="switch-slider"></span></span>
+          <span class="switch-row-lbl">запоминать домены</span>
+        </label>
+        <div class="sdb-seg" id="sdbSeg">
+          <button type="button" data-r="1" onclick="_sdbRange(1)">Сегодня</button>
+          <button type="button" data-r="7" onclick="_sdbRange(7)">7 дней</button>
+          <button type="button" data-r="30" onclick="_sdbRange(30)">30 дней</button>
+        </div>
+      </div>
+      <div id="sdbWarn"></div>
+      <div id="sdbSel" class="sdb-sel hidden"></div>
+      <div class="sdb-tiles">
+        <div class="sdb-tile"><div class="sdb-l" id="sdbTotalL">Всего запросов</div><div class="sdb-v sdb-c-tot" id="sdbTotal">—</div><div class="sdb-d" id="sdbTotalD">к DNS сервера</div></div>
+        <div class="sdb-tile"><div class="sdb-l">Заблокировано</div><div class="sdb-v sdb-c-blk" id="sdbBlocked">—</div><div class="sdb-d" id="sdbBlockedD"></div></div>
+        <div class="sdb-tile"><div class="sdb-l">Доля</div><div class="sdb-v" id="sdbShare">—</div><div class="sdb-d" id="sdbShareD">от всех запросов</div></div>
+        <div class="sdb-tile"><div class="sdb-l">Пик за день</div><div class="sdb-v" id="sdbPeak">—</div><div class="sdb-d" id="sdbPeakD"></div></div>
+      </div>
+      <div class="sdb-cards">
+        <div class="sdb-card">
+          <div class="sdb-card-t">Типы запросов</div>
+          <div class="sdb-list" id="sdbTypes"></div>
+        </div>
+        <div class="sdb-card">
+          <div class="sdb-card-t">Заблокированные домены <span id="sdbBlkCnt" class="sdb-cnt"></span></div>
+          <div class="sdb-list sdb-scroll" id="sdbBlk"></div>
+        </div>
+        <div class="sdb-card">
+          <div class="sdb-card-t">Топ доменов <span id="sdbDomCnt" class="sdb-cnt"></span></div>
+          <div class="sdb-leg"><span class="sdb-c-tot">всего</span> · <span class="sdb-c-blk">заблокировано</span> · (доля)</div>
+          <div class="sdb-list sdb-scroll" id="sdbDom"></div>
+        </div>
+        <div class="sdb-card">
+          <div class="sdb-card-t">Топ компаний</div>
+          <div class="sdb-leg"><span class="sdb-c-tot">всего</span> · <span class="sdb-c-blk">заблокировано</span> · (доля)</div>
+          <div class="sdb-list sdb-scroll" id="sdbComp"></div>
+        </div>
+        <div class="sdb-card">
+          <div class="sdb-card-t">Топ стран</div>
+          <div class="sdb-leg">куда уходили запросы — страна сайта по GeoIP</div>
+          <div class="sdb-list sdb-scroll" id="sdbCnt"></div>
+        </div>
+        <div class="sdb-card">
+          <div class="sdb-card-t">Топ клиентов</div>
+          <div class="sdb-leg"><span class="sdb-c-tot">соединений</span> · <span class="sdb-c-blk">на заблокированные</span> · (доля)</div>
+          <div class="sdb-list sdb-scroll" id="sdbCl"></div>
+        </div>
+      </div>
+      <div class="sdb-caveat"><b>Это оценка, не точный счёт.</b> Повторы из кеша сервера сюда не доходят, а A и AAAA одного домена считаются одним запросом. AWG-клиенты с DNS 1.1.1.1 и Direct-домены, которые телефон резолвит сам, сюда не попадают. Клиенты считаются по журналам XRay и Hysteria: соединения к доменам, а не DNS-запросы.</div>
+    </div>
+    </div>
 
     <div class="modal-actions sdns-foot">
       <button class="btn btn-sm btn-ghost" id="sdnsCheckBtn" onclick="checkServerDns()" title="Пробный запуск с этим DNS на сервере: отвечает ли, за сколько, режет ли рекламу, кто резолвит на самом деле">Проверить</button>
@@ -3718,7 +3798,8 @@ code.tpl-chip, .tpl-info-head code { font-family: 'JetBrains Mono', monospace; }
   </div>
 </div>
 <style>
-.sdns-modal { width: 760px; max-width: calc(100vw - 48px); }
+/* Одна ширина на обе вкладки: при переходе «Статистика» ⇄ «Настройки» окно не прыгает. */
+.sdns-modal { width: 980px; max-width: calc(100vw - 48px); --tabbed-h: 900px; }
 .sdns-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
 .sdns-on-row, .sdns-btn-row { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
 .sdns-on-row .switch-row-lbl { font-size: 13px; color: var(--text); }
@@ -3742,6 +3823,8 @@ code.tpl-chip, .tpl-info-head code { font-family: 'JetBrains Mono', monospace; }
 .sdns-parsed .ln .up { color: var(--text3); font-family: var(--mono, monospace); font-size: 11px; margin-left: 6px; }
 .sdns-parsed .warn { color: var(--orange, #fbbf24); padding-left: 18px; }
 .sdns-foot { align-items: center; }
+/* На вкладке «Статистика» «Проверить» и «Применить» не к чему — только «Закрыть». */
+.sdns-modal.on-stat #sdnsCheckBtn, .sdns-modal.on-stat #sdnsApplyBtn, .sdns-modal.on-stat .sdns-foot > span { display: none; }
 .dns-check-line.warn .mk, .dns-check-line.warn .st { color: var(--orange, #fbbf24); }
 .dns-check-line.step { color: var(--text3); }
 /* Итог операции в окне DNS — заметно, чтобы было ясно: работает, можно закрывать. */
@@ -3763,8 +3846,73 @@ code.tpl-chip, .tpl-info-head code { font-family: 'JetBrains Mono', monospace; }
 /* Включён и отвечает — надпись нашим салатовым, как акцентный текст панели. */
 .srv-dns-btn:not(.is-bad) { color: var(--green); }
 .srv-dns-btn.is-bad { background: rgba(248, 113, 113, .16); border-color: rgba(248, 113, 113, .45); color: #fca5a5; }
+/* Статистика DNS сервера: карточки (как у AdGuard), списки прокручиваются внутри. */
+.sdb-h { display: flex; align-items: center; gap: 10px 14px; flex-wrap: wrap; margin-bottom: 12px; }
+.sdb-sub { color: var(--text3); font-size: 12.5px; }
+.sdb-top-sw { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.sdb-top-sw .switch-row-lbl { font-size: 12px; color: var(--text3); }
+.sdb-seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.sdb-seg button { background: transparent; border: 0; color: var(--text2); font: 500 12.5px 'Outfit', sans-serif; padding: 6px 12px; cursor: pointer; }
+.sdb-seg button.on { background: var(--bg3); color: var(--text); }
+.sdb-warn { margin-bottom: 12px; padding: 9px 12px; border-radius: 8px; font-size: 12.5px; line-height: 1.45; border: 1px solid rgba(251, 146, 60, .45); background: rgba(251, 146, 60, .10); color: var(--text2); }
+.sdb-warn b { color: var(--orange); font-weight: 600; }
+.sdb-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
+.sdb-tile { border: 1px solid var(--border); border-radius: 12px; padding: 11px 14px; background: var(--bg); min-width: 0; }
+.sdb-l { font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: var(--text3); }
+.sdb-v { font-size: 24px; font-weight: 600; margin-top: 2px; color: var(--text); font-variant-numeric: tabular-nums; }
+.sdb-d { font-size: 12px; color: var(--text3); margin-top: 1px; }
+.sdb-d .up { color: var(--orange); }
+.sdb-d .dn { color: var(--green); }
+.sdb-c-tot { color: var(--accent) !important; }
+.sdb-c-blk { color: var(--red, #f87171) !important; }
+.sdb-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.sdb-card { border: 1px solid var(--border); border-radius: 12px; padding: 13px 14px 8px; background: var(--bg); min-width: 0; display: flex; flex-direction: column; }
+.sdb-card-t { font-size: 14px; font-weight: 600; color: var(--text); margin-bottom: 8px; }
+.sdb-cnt { color: var(--text3); font-weight: 400; font-size: 12.5px; }
+.sdb-leg { font-size: 11.5px; color: var(--text3); margin: -4px 0 4px; }
+/* Полоса прокрутки — общая панельная (::-webkit-scrollbar): scrollbar-width/color тут не ставить,
+   в Chrome они перебивают её и рисуют системную со стрелками. */
+.sdb-scroll { height: 208px; overflow-y: auto; }
+.sdb-click { cursor: pointer; border-radius: 6px; }
+.sdb-click:hover { background: var(--bg3); }
+.sdb-click.on { background: rgba(34, 211, 238, .10); box-shadow: inset 2px 0 0 var(--accent); }
+.sdb-click .nm { padding-left: 4px; }
+.sdb-sel { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; padding: 8px 12px; border-radius: 10px; border: 1px solid rgba(34, 211, 238, .4); background: rgba(34, 211, 238, .08); font-size: 13px; color: var(--text2); }
+.sdb-sel b { color: var(--text); font-weight: 600; }
+.sdb-sel-x { margin-left: auto; background: transparent; border: 1px solid var(--border); color: var(--text2); border-radius: 6px; width: 26px; height: 26px; cursor: pointer; font-size: 13px; line-height: 1; }
+.sdb-sel-x:hover { background: var(--bg3); color: var(--text); }
+.sdb-row { display: grid; gap: 8px; align-items: center; padding: 6px 0; border-bottom: 1px solid rgba(45, 58, 79, .55); font-size: 13px; color: var(--text2); }
+.sdb-row:last-child { border-bottom: 0; }
+.sdb-r2 { grid-template-columns: 22px minmax(0, 1fr) auto 38px; }
+.sdb-r2i { grid-template-columns: 24px minmax(0, 1fr) auto 38px; }
+.sdb-r3 { grid-template-columns: minmax(0, 1fr) auto auto 44px; }
+.sdb-r3i { grid-template-columns: 24px minmax(0, 1fr) auto auto 44px; }
+.sdb-row .nm { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.sdb-row .nm.mono { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+.sdb-row .nm.x { color: #c4b5fd; }
+.sdb-row .n { color: var(--text3); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.sdb-row .v { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }
+.sdb-row .tot { color: var(--accent); font-variant-numeric: tabular-nums; text-align: right; }
+.sdb-row .blk { color: var(--red, #f87171); font-variant-numeric: tabular-nums; text-align: right; }
+.sdb-row .pc { color: var(--text3); font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; }
+.sdb-dot { width: 11px; height: 11px; border-radius: 3px; margin-left: 4px; }
+.sdb-ic { width: 22px; height: 22px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; font-size: 10.5px; font-weight: 700; color: #0a0e17; }
+.sdb-cc { background: var(--bg3); color: var(--text2); border: 1px solid var(--border); font-size: 9.5px; }
+.sdb-proto { font-size: 10.5px; color: var(--text3); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; margin-left: 4px; }
+.sdb-empty { color: var(--text3); font-size: 12.5px; line-height: 1.5; padding: 6px 0; }
+.sdb-caveat { margin-top: 12px; font-size: 12px; color: var(--text3); line-height: 1.5; }
+.sdb-caveat b { color: var(--text2); font-weight: 500; }
+@media (max-width: 980px) {
+  .sdb-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 @media (max-width: 640px) {
   .sdns-modal { width: calc(100vw - 24px); max-width: calc(100vw - 24px); }
+  .sdb-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .sdb-cards { grid-template-columns: minmax(0, 1fr); }
+  .sdb-top-sw { margin-left: 0; }
+  .sdb-seg { width: 100%; }
+  .sdb-seg button { flex: 1 1 0; }
+  .sdb-v { font-size: 20px; }
 }
 </style>
 
@@ -4103,7 +4251,7 @@ code.tpl-chip, .tpl-info-head code { font-family: 'JetBrains Mono', monospace; }
       <span id="dnsGlobalSrvLink" style="display:none;">
       <br><br>
       <b>Сам сервер резолвит через «DNS сервера».</b> Здесь — только DNS для конфигов клиентов.
-      <a href="#" onclick="closeModal('dnsModal'); openServerDnsModal(); return false;">Открыть DNS сервера →</a>
+      <a href="#" onclick="closeModal('dnsModal'); openServerDnsModal('set'); return false;">Открыть DNS сервера →</a>
       </span>
     </div>
 
@@ -4265,14 +4413,14 @@ code.tpl-chip, .tpl-info-head code { font-family: 'JetBrains Mono', monospace; }
       <div id="allowIpStateBlock" class="allowip-state"></div>
     </div>
 
-    <div style="display:flex;justify-content:flex-end;gap:6px;margin-top:12px;">
+    <div style="display:flex;justify-content:flex-end;gap:6px;padding-top:12px;">
       <button class="btn btn-sm btn-ghost" onclick="closeModal('allowIpModal')">Отмена</button>
       <button class="btn btn-sm btn-success" id="allowIpSaveBtn" onclick="saveAllowIpModal()">Сохранить</button>
     </div>
   </div>
 </div>
 <style>
-.allowip-modal { width: 460px; max-width: 94vw; }
+.allowip-modal { width: 460px; max-width: 94vw; --tabbed-h: 680px; }
 /* Тот же контейнер описания, что у .rule-mgr-help и .dns-info: подложка var(--bg),
    темнее модалки. */
 .allowip-info {

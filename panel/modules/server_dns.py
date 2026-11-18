@@ -45,6 +45,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 from flask import Blueprint, jsonify, request
 
+from . import server_dns_stats as stats
+
 bp = Blueprint('server_dns', __name__)
 
 # --- зависимости из app.py (init) ---------------------------------------------
@@ -54,6 +56,7 @@ _save_server_config = None
 apply_xray_dns = None
 asn_lookup = None
 _github_latest_tag = None     # необязательная: без неё — только зашитая версия
+geoip_lookup = None           # необязательная: страны в статистике (GeoLite2-City)
 SERVER_CFG = {}
 DATA_DIR = ''
 PANEL_VERSION = ''
@@ -68,6 +71,11 @@ CONF_DIR = '/etc/awg-panel-dns'
 CONF_FILE = CONF_DIR + '/dnsproxy.yaml'
 UNIT_NAME = 'awg-panel-dns'
 UNIT_FILE = '/etc/systemd/system/awg-panel-dns.service'
+# Подробный журнал dnsproxy для счётчика заблокированного (server_dns_stats) и
+# таймер, который не даёт ему разрастись, если панель перестала его читать.
+TRIM_NAME = 'awg-panel-dns-trim'
+TRIM_SERVICE = '/etc/systemd/system/awg-panel-dns-trim.service'
+TRIM_TIMER = '/etc/systemd/system/awg-panel-dns-trim.timer'
 LISTEN_IP = '127.0.0.2'
 RESOLVED_STUB = '127.0.0.53'
 # Имя на «zz-»: drop-in'ы читаются по алфавиту, наш должен идти последним — его
@@ -99,6 +107,7 @@ DEFAULTS = {
     'auto_failover': True, # наш DNS лёг — временно отдать систему DNS хостера
     'failover_since': 0,   # >0 — сейчас в таком откате (unix-время начала)
     'auto_update': True,   # сам обновлять dnsproxy до проверенной версии
+    'stats_top': True,     # в счётчике заблокированного запоминать имена доменов (топ)
     'update_last_check': 0,
 }
 
@@ -134,6 +143,7 @@ _lock = threading.Lock()          # одна операция с системо�
 _job = {}                         # текущая/последняя фоновая операция
 _health = {'ok': None, 'ts': 0, 'error': '', 'ms': 0, 'fails': 0}
 _started = False
+_heal_tried = {'conf': None}   # конфиг, для которого уже пробовали включить журнал
 
 
 def init(deps):
@@ -144,6 +154,17 @@ def init(deps):
     global STATE_DIR, RESOLV_BACKUP
     STATE_DIR = os.path.join(DATA_DIR, 'server_dns')
     RESOLV_BACKUP = os.path.join(STATE_DIR, 'resolv.conf.bak')
+    # Клиенты в статистике — по журналам XRay и Hysteria (DNS клиента не видит).
+    hy_log, hy_names = '', None
+    try:
+        from .hysteria import ACCESS_LOG as hy_log, load_clients as _hy_clients
+
+        def hy_names():
+            return {c.get('id'): c.get('name') for c in (_hy_clients() or []) if c.get('id')}
+    except Exception:
+        pass
+    stats.init(STATE_DIR, settings, geo_fn=geoip_lookup,
+               xray_log=os.path.join(DATA_DIR, 'logs', 'xray_access.log'), hy_log=hy_log, hy_names=hy_names)
 
 
 def _auth(fn):
@@ -865,7 +886,7 @@ def _bootstrap_for(entries, sys_upstream):
     return list(dict.fromkeys(boot))
 
 
-def render_config(main, fallback, sys_upstream, listen_ip=LISTEN_IP, port=53):
+def render_config(main, fallback, sys_upstream, listen_ip=LISTEN_IP, port=53, querylog=False):
     lines = [
         '# Управляется awg-panel («Настройки → DNS сервера»). Ручные правки затрутся.',
         'listen-addrs: %s' % _yaml_list([listen_ip]),
@@ -884,23 +905,20 @@ def render_config(main, fallback, sys_upstream, listen_ip=LISTEN_IP, port=53):
         'cache-size: 4194304',
         'hosts-file-enabled: false',
         'pending-requests-enabled: true',
-        '',
     ]
+    if querylog:
+        # Журнал для счётчика заблокированного: панель дочитывает и обнуляет его
+        # каждые 10 с (server_dns_stats). Только у боевого юнита, не у пробных.
+        lines += ['verbose: true', 'output: "%s"' % stats.QUERY_LOG]
+    lines.append('')
     return '\n'.join(lines)
 
 
 def _free_port():
-    for _ in range(30):
-        port = random.randint(20000, 60000)
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as u:
-                u.bind(('127.0.0.1', port))
-            with socket.socket() as t:
-                t.bind(('127.0.0.1', port))
-            return port
-        except OSError:
-            continue
-    raise RuntimeError('не нашлось свободного порта для пробного запуска')
+    # Не из диапазона порт-хоппинга Hysteria: его nft-правило заворачивает и
+    # локальный UDP, пробный dnsproxy тогда запросов не получает (local_ports).
+    from .local_ports import free_port
+    return free_port()
 
 
 def trial(entries, sys_upstream, full=True, binary=None):
@@ -974,19 +992,47 @@ def _write_unit():
         'CapabilityBoundingSet=CAP_NET_BIND_SERVICE\n'
         'NoNewPrivileges=yes\n'
         'LimitNOFILE=65536\n'
+        # Каталог журнала для счётчика: /var/lib/awg-panel-dns, только root и сам юнит.
+        'StateDirectory=awg-panel-dns\n'
+        'StateDirectoryMode=0700\n'
         '\n'
         '[Install]\n'
         'WantedBy=multi-user.target\n'
     ) % (DNSPROXY_BIN, CONF_FILE)
-    old = ''
-    try:
-        old = open(UNIT_FILE).read()
-    except OSError:
-        pass
-    if old != body:
-        with open(UNIT_FILE, 'w') as f:
-            f.write(body)
+    trim_svc = (
+        '[Unit]\n'
+        'Description=Обрезка журнала DNS сервера (awg-panel)\n'
+        '\n'
+        '[Service]\n'
+        'Type=oneshot\n'
+        'ExecStart=-/usr/bin/find -L %s -maxdepth 1 -name query.log -size +%dM'
+        ' -exec /usr/bin/truncate -s 0 {} \\;\n'
+    ) % (stats.LOG_DIR, stats.TRIM_MB)
+    trim_timer = (
+        '[Unit]\n'
+        'Description=Обрезка журнала DNS сервера раз в 2 минуты (awg-panel)\n'
+        '\n'
+        '[Timer]\n'
+        'OnBootSec=2min\n'
+        'OnUnitActiveSec=2min\n'
+        '\n'
+        '[Install]\n'
+        'WantedBy=timers.target\n'
+    )
+    changed = False
+    for path, text in ((UNIT_FILE, body), (TRIM_SERVICE, trim_svc), (TRIM_TIMER, trim_timer)):
+        old = ''
+        try:
+            old = open(path).read()
+        except OSError:
+            pass
+        if old != text:
+            with open(path, 'w') as f:
+                f.write(text)
+            changed = True
+    if changed:
         _sh(['systemctl', 'daemon-reload'])
+    _sh(['systemctl', 'enable', '--now', TRIM_NAME + '.timer'], 15)
 
 
 def _write_conf(text):
@@ -1241,7 +1287,7 @@ def _job_apply(main_text, fb_text):
         except OSError:
             pass
         step('Запускаю dnsproxy на %s…' % LISTEN_IP)
-        _write_conf(render_config(main, fb, sysup))
+        _write_conf(render_config(main, fb, sysup, querylog=True))
         _write_unit()
         _sh(['systemctl', 'enable', UNIT_NAME], 15)
         _sh(['systemctl', 'restart', UNIT_NAME], 20)
@@ -1294,6 +1340,7 @@ def _job_disable():
         _restore_system(cur.get('mode') or '')
         step('Останавливаю dnsproxy…')
         _sh(['systemctl', 'disable', '--now', UNIT_NAME], 20)
+        _sh(['systemctl', 'disable', '--now', TRIM_NAME + '.timer'], 15)
         _save({'enabled': False, 'mode': '', 'failover_since': 0})
         _health.update(ok=None, ts=0, error='', fails=0, oks=0)
         step('Возвращаю XRay его DNS из Global…')
@@ -1427,9 +1474,46 @@ def _health_tick():
             audit('warn', 'DNS сервера: не удалось перейти на DNS хостера: %s' % e)
 
 
+def _heal_querylog():
+    s = settings()
+    if not s.get('enabled') or s.get('failover_since') or not os.path.exists(CONF_FILE):
+        return
+    try:
+        old_conf = open(CONF_FILE).read()
+    except OSError:
+        return
+    if stats.QUERY_LOG in old_conf:
+        return
+    # Не вышло один раз с этим конфигом — не дёргать dnsproxy каждые 30 с снова.
+    if _heal_tried.get('conf') == old_conf:
+        return
+    _heal_tried['conf'] = old_conf
+    try:
+        main, fb = _parse_both(s.get('main') or '', s.get('fallback') or '')
+    except Exception:
+        return
+    with _lock:
+        _write_conf(render_config(main, fb, s.get('sys_upstream') or [], querylog=True))
+        _write_unit()
+        _sh(['systemctl', 'restart', UNIT_NAME], 20)
+        ok, err = _wait_listen()
+        if not ok:
+            _write_conf(old_conf)
+            _sh(['systemctl', 'restart', UNIT_NAME], 20)
+            audit('warn', 'DNS сервера: журнал для счётчика не включился (%s) — оставлено как было' % err)
+            return
+    audit('info', 'DNS сервера: включён счётчик заблокированного')
+
+
 def _health_loop():
     time.sleep(5)
     while True:
+        # Конфиг без журнала (обновили панель со старого, ручная правка) — вернуть журнал.
+        try:
+            if _job.get('state') != 'running' and not _updating['on']:
+                _heal_querylog()
+        except Exception:
+            pass
         try:
             _health_tick()
         except Exception:
@@ -1447,6 +1531,7 @@ def start_background():
     _started = True
     threading.Thread(target=_health_loop, daemon=True).start()
     threading.Thread(target=_update_loop, daemon=True).start()
+    stats.start_background()
 
 
 # =============================================================================
@@ -1493,7 +1578,8 @@ def api_state():
 def api_get():
     s = settings()
     return jsonify({
-        'settings': {k: s[k] for k in ('enabled', 'main', 'fallback', 'show_button', 'mode', 'auto_failover', 'auto_update')},
+        'settings': {k: s[k] for k in ('enabled', 'main', 'fallback', 'show_button', 'mode', 'auto_failover',
+                                       'auto_update', 'stats_top')},
         'state': _state(),
         'main': [_public(e) for e in parse_many(s['main'])],
         'fallback': [_public(e) for e in parse_many(s['fallback'])],
@@ -1557,10 +1643,29 @@ def api_apply():
 def api_button():
     """Тумблеры окна, которые систему не трогают: кнопка в шапке и авто-откат."""
     d = request.get_json(silent=True) or {}
-    patch = {k: bool(d[k]) for k in ('show_button', 'auto_failover', 'auto_update') if k in d}
+    patch = {k: bool(d[k]) for k in ('show_button', 'auto_failover', 'auto_update', 'stats_top') if k in d}
     if patch:
+        was_top = settings().get('stats_top', True)
         _save(patch)
+        if was_top and patch.get('stats_top') is False:
+            stats.forget_top()
     return jsonify({'ok': True, 'state': _state()})
+
+
+@bp.route('/api/server-dns/blocked')
+@_auth
+def api_blocked():
+    """Статистика DNS: суммы по дням и списки за сегодня/7/30 дней.
+    ?client=proto:имя — то же по одному клиенту (из журналов XRay/Hysteria)."""
+    s = settings()
+    client = (request.args.get('client') or '').strip()[:200]
+    if client:
+        return jsonify(stats.client_snapshot(client))
+    out = stats.snapshot()
+    out.update(enabled=bool(s.get('enabled')), stats_top=bool(s.get('stats_top', True)),
+               provider=', '.join(e.get('provider') or e.get('host') or '' for e in parse_many(s.get('main') or '')
+                                  if e.get('ok')) if s.get('enabled') else '')
+    return jsonify(out)
 
 
 @bp.route('/api/server-dns/verify', methods=['POST'])

@@ -94,23 +94,10 @@ def _test(xray_bin, cfg, work, asset_dir):
 
 
 def _free_port():
-    """Порт, свободный и по TCP, и по UDP (mKCP/XDNS/Hysteria слушают UDP)."""
-    for _ in range(50):
-        t = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            t.bind(('127.0.0.1', 0))
-            port = t.getsockname()[1]
-            u = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            try:
-                u.bind(('127.0.0.1', port))
-                return port
-            except OSError:
-                continue
-            finally:
-                u.close()
-        finally:
-            t.close()
-    raise RuntimeError('не нашлось свободного порта для пробного запуска')
+    """Порт, свободный и по TCP, и по UDP (mKCP/XDNS/Hysteria слушают UDP), вне
+    диапазона порт-хоппинга Hysteria (его правило перехватывает локальный UDP)."""
+    from .local_ports import free_port
+    return free_port()
 
 
 def _smoke(xray_bin, cfg, work, asset_dir, secs=3):
