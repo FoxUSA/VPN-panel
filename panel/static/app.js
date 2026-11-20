@@ -4,6 +4,35 @@
 const API = '';
 let refreshTimer = null;
 
+// Буфер обмена на http. Браузер даёт navigator.clipboard только защищённой
+// странице (https или localhost), а без своего домена панель открывается по
+// http://IP:8081 — и все «Копировать» молча ничего не делали, плашки не было.
+// Подменяем writeText копированием через скрытое поле: так работают все вызовы
+// разом, включая hysteria.js и tgweb.js.
+(function () {
+  if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) return;
+  const write = (text) => new Promise((resolve, reject) => {
+    const ta = document.createElement('textarea');
+    ta.value = String(text == null ? '' : text);
+    ta.setAttribute('readonly', '');
+    ta.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;';
+    // В открытой модалке фокус держит она — поле кладём внутрь неё.
+    const ovs = [...document.querySelectorAll('.modal-overlay')].filter(o => o.offsetParent !== null);
+    const host = (ovs.length && ovs[ovs.length - 1].querySelector('.modal')) || document.body;
+    host.appendChild(ta);
+    ta.focus();
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) {}
+    ta.remove();
+    ok ? resolve() : reject(new Error('копирование недоступно'));
+  });
+  try {
+    if (!navigator.clipboard) Object.defineProperty(navigator, 'clipboard', {value: {}, configurable: true});
+    navigator.clipboard.writeText = write;
+  } catch (e) {}
+})();
+
 // ⚠ в шапке и значки протоколов сами опрашиваются раз в 5 минут. Любое действие,
 // меняющее состояние сервера, перечитывает их здесь: вызовы по месту терялись, и
 // «новая версия» висела после обновления. Новый эндпоинт по умолчанию влияет;
@@ -326,6 +355,7 @@ function _applyAwgStatus(data, fromCache) {
     document.getElementById('onlineClients').textContent = onlineCount;
     const sv = document.getElementById('awgService');
     if (sv && !fromCache) renderProtoState(sv, data.state, data.running);
+    if (!fromCache) _paintInstallBanner('awg', data.state);
 
     renderPeers(peers);
 }
@@ -407,14 +437,23 @@ const PROTO_INSTALL_TEXT = {
   mtg: 'MTProto-прокси на сервере не установлен. Панель скачает бинарь mtg, сгенерирует секрет, ' +
        'создаст конфиг и юнит с записью логов в каталог панели, подберёт свободный порт и откроет ' +
        'его в фаерволе.',
+  awg: 'AmneziaWG на сервере не установлен. Панель подключит репозиторий AmneziaWG, соберёт модуль ' +
+       'под текущее ядро (это несколько минут), создаст конфиг awg0, подберёт свободный UDP-порт, ' +
+       'откроет его в фаерволе и поднимет интерфейс.',
 };
 const PROTO_INSTALL_DEP = {xray: 'proto_xray_missing', mtg: 'proto_mtg_missing'};
+const PROTO_SECTION = {xray: 'sectionXray', mtg: 'sectionMtg', awg: 'sectionAwg'};
 
 function _paintInstallBanner(kind, state) {
   const box = document.getElementById(kind + 'InstallBanner');
   if (!box) return;
   const show = state === 'not_installed';
   box.classList.toggle('hidden', !show);
+  // Протокола нет — плиткам и списку показывать нечего (CSS .proto-absent).
+  // MTProto вкладка Telegram (tgweb.js) переносит в свою панель tgPaneMtg.
+  const sec = (kind === 'mtg' && document.getElementById('tgPaneMtg'))
+              || document.getElementById(PROTO_SECTION[kind]);
+  if (sec) sec.classList.toggle('proto-absent', show);
   if (show) {
     const t = document.getElementById(kind + 'InstallText');
     if (t) t.textContent = PROTO_INSTALL_TEXT[kind] || '';
@@ -1586,6 +1625,7 @@ function showBusyOverlay(title, subtitle) {
       <div id="panelRestartStatus" style="color:var(--text3);font-size:13px;"></div>
       <div class="spinner" style="width:32px;height:32px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin 0.8s linear infinite;"></div>
       <div id="panelBusySteps" style="display:none;max-width:560px;width:calc(100% - 32px);max-height:50vh;overflow:auto;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px 14px;font-size:13px;line-height:1.5;"></div>
+      <div id="panelBusyLoad" class="busy-load" style="display:none;"></div>
       <style>@keyframes spin{to{transform:rotate(360deg)}}</style>`;
     document.body.appendChild(overlay);
   }
@@ -1593,7 +1633,67 @@ function showBusyOverlay(title, subtitle) {
   document.getElementById('panelRestartStatus').textContent = subtitle || '';
   const steps = document.getElementById('panelBusySteps');
   if (steps) { steps.style.display = 'none'; steps.innerHTML = ''; }
+  const load = document.getElementById('panelBusyLoad');
+  if (load) { load.style.display = 'none'; load.innerHTML = ''; }
+  _busyLoadHist = [];
   overlay.style.display = 'flex';
+}
+
+// Нагрузка сервера под шагами долгой операции. Шаг «Сборка модуля DKMS» стоит
+// минутами без изменений — по живому процессору и списку работающих программ
+// видно, что сервер занят делом, а не завис. Данные приходят в fix-status.
+let _busyLoadHist = [];
+const _BUSY_LOAD_N = 90;  // 90 опросов × 2 с = последние 3 минуты
+const _BUSY_LOAD_EN = {
+  'компилятор C': 'C compiler', 'компоновщик': 'linker', 'сборка модуля ядра': 'kernel module build',
+  'сборка (make)': 'build (make)', 'установка пакетов': 'package install',
+  'загрузка пакетов': 'package download', 'загрузка файлов': 'file download',
+  'распаковка': 'unpacking', 'сертификат': 'certificate', 'загрузка модуля': 'module load',
+};
+function _renderBusyLoad(ld) {
+  const box = document.getElementById('panelBusyLoad');
+  if (!box || !ld || ld.cpu == null) return;
+  const en = _i18nEn();
+  const cpu = Math.round(ld.cpu);
+  _busyLoadHist.push(cpu);
+  if (_busyLoadHist.length > _BUSY_LOAD_N) _busyLoadHist.shift();
+  const memPct = ld.mem_total ? Math.round(ld.mem_used / ld.mem_total * 100) : null;
+  const bar = p => `<span class="bl-bar"><i style="width:${Math.max(0, Math.min(100, p))}%"></i></span>`;
+  // Спарклайн процессора: одна серия, ось 0–100 %, новые точки справа.
+  const W = 300, H = 40, n = _busyLoadHist.length;
+  const x = i => (W * (i + _BUSY_LOAD_N - n) / (_BUSY_LOAD_N - 1)).toFixed(1);
+  const y = v => (H - 2 - (H - 4) * v / 100).toFixed(1);
+  const pts = _busyLoadHist.map((v, i) => x(i) + ',' + y(v)).join(' ');
+  const area = n > 1 ? `<polygon class="bl-area" points="${x(0)},${H} ${pts} ${x(n - 1)},${H}"/>` : '';
+  const spark = `<svg class="bl-spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+      <line class="bl-grid" x1="0" x2="${W}" y1="${y(50)}" y2="${y(50)}"/>
+      ${area}<polyline class="bl-line" points="${pts}"/></svg>`;
+  const nm = t => en ? (_BUSY_LOAD_EN[t] || t) : t;
+  const top = (ld.top || []).map(t =>
+    `<span class="bl-proc"><b>${escHtml(nm(t.name))}</b>${t.n > 1 ? ' ×' + t.n : ''}`
+    + `${t.name !== t.comm ? ` <span class="bl-comm">${escHtml(t.comm)}</span>` : ''} — ${t.pct}%</span>`).join('');
+  box.innerHTML = `
+    <div class="bl-head"><span>${en ? 'Server load' : 'Нагрузка сервера'}</span>
+      <span class="bl-sub">${en ? 'last 3 min · updates every 2 s' : 'последние 3 мин · обновляется каждые 2 с'}</span></div>
+    <div class="bl-row"><span class="bl-k">${en ? 'CPU' : 'Процессор'}</span>${bar(cpu)}<span class="bl-v">${cpu}%</span></div>
+    ${memPct == null ? '' : `<div class="bl-row"><span class="bl-k">${en ? 'Memory' : 'Память'}</span>${bar(memPct)}
+      <span class="bl-v">${formatBytesShort(ld.mem_used)} ${en ? 'of' : 'из'} ${formatBytesShort(ld.mem_total)}</span></div>`}
+    <div class="bl-chart">${spark}<div class="bl-tip"></div></div>
+    <div class="bl-now">${en ? 'Running now:' : 'Сейчас работает:'} ${top || `<span class="bl-comm">${en ? 'no noticeable load — waiting' : 'заметной нагрузки нет — ожидание'}</span>`}</div>`;
+  box.style.display = 'block';
+  // Наведение на график: сколько было в ту секунду.
+  const chart = box.querySelector('.bl-chart'), tip = box.querySelector('.bl-tip');
+  chart.onmousemove = e => {
+    const r = chart.getBoundingClientRect();
+    const slot = Math.round((e.clientX - r.left) / r.width * (_BUSY_LOAD_N - 1)) - (_BUSY_LOAD_N - n);
+    if (slot < 0 || slot >= n) { tip.style.display = 'none'; return; }
+    const ago = (n - 1 - slot) * 2;
+    tip.textContent = (ago ? (en ? `${ago} s ago` : `${ago} с назад`) : (en ? 'now' : 'сейчас'))
+      + ` · ${_busyLoadHist[slot]}%`;
+    tip.style.left = Math.min(Math.max(e.clientX - r.left, 40), r.width - 40) + 'px';
+    tip.style.display = 'block';
+  };
+  chart.onmouseleave = () => { tip.style.display = 'none'; };
 }
 
 // Пошаговый прогресс длинной операции. Без него установка модуля ядра выглядит
@@ -2737,12 +2837,14 @@ function openServerNameModal(forceFirstRun) {
   document.getElementById('serverNameProtos').classList.toggle('hidden', !forceFirstRun);
   if (forceFirstRun) {
     const list = document.getElementById('serverNameProtosList');
-    list.innerHTML = ALL_PROTOCOLS.map(id => `
-      <label style="display:flex;align-items:center;gap:10px;cursor:pointer;">
-        <input type="checkbox" data-proto="${id}">
-        <span>${escHtml(PROTO_LABELS[id] || id)}</span>
-      </label>`).join('');
+    list.innerHTML = ALL_PROTOCOLS.map(id => _protoPickRow(id, false)).join('');
     list.onchange = () => _sanitizeServerNameInput(input);
+    // Про домен человека никто не спрашивает — панель видит сама и говорит, что
+    // из этого следует, до выбора протоколов.
+    const dom = (_serverConfig && _serverConfig.tls_domain) || '';
+    document.getElementById('serverNameDomainNote').innerHTML = dom
+      ? `Найден сертификат домена <b>${escHtml(dom)}</b>: XRay встанет на этом домене в режиме TLS, панель откроется по https.`
+      : 'Своего домена на сервере нет — это нормально. XRay и Hysteria замаскируются под чужие сайты, вход в панель останется по IP. Домен можно подключить позже — шаг «Домен и HTTPS» инструкции.';
   }
   document.getElementById('serverNameModal').classList.remove('hidden');
   input.oninput = () => _sanitizeServerNameInput(input);
@@ -2782,6 +2884,30 @@ async function submitServerName() {
 const ALL_PROTOCOLS = ['awg', 'xray', 'mtg'];
 const ALL_PLATFORMS = ['shadowrocket', 'loon', 'clash'];
 const PROTO_LABELS = {awg: 'AmneziaWG', xray: 'XRay', mtg: 'MTProto'};
+// Что это и нужен ли домен — одной строкой под названием, чтобы выбор в окне
+// первого входа и в «Скрыть протоколы» был осознанным.
+const PROTO_HINTS = {
+  awg: 'VPN на основе WireGuard с маскировкой. Домен не нужен.',
+  xray: 'VPN по протоколу VLESS. Без домена маскируется под чужой сайт, с доменом — под ваш.',
+  mtg: 'Прокси только для Telegram. Домен не нужен.',
+  hysteria: 'Быстрый VPN поверх QUIC, выручает на плохой связи. Домен не нужен.',
+  tgweb: 'Прокси для Telegram внутри обычного HTTPS. Нужен свой домен с сертификатом.',
+};
+// Строка выбора протокола. Telegram WEB без сертификата домена выбрать нельзя:
+// работать он не сможет, а вкладка только путала бы. Уже включённый — снять можно.
+function _protoPickRow(id, checked) {
+  const noDomain = id === 'tgweb' && !(_serverConfig && _serverConfig.tls_domain);
+  const off = noDomain && !checked;
+  return `
+    <label class="proto-pick${off ? ' is-off' : ''}">
+      <input type="checkbox" data-proto="${id}"${checked ? ' checked' : ''}${off ? ' disabled' : ''}>
+      <span class="proto-pick-b">
+        <span class="proto-pick-t">${escHtml(PROTO_LABELS[id] || id)}</span>
+        ${PROTO_HINTS[id] ? `<span class="proto-pick-d">${PROTO_HINTS[id]}</span>` : ''}
+        ${noDomain ? '<span class="proto-pick-d proto-pick-no">Недоступен: на сервере нет сертификата домена.</span>' : ''}
+      </span>
+    </label>`;
+}
 const PLAT_LABELS = {shadowrocket: 'Shadowrocket', loon: 'Loon', clash: 'Clash'};
 
 function openProtocolsModal() {
@@ -2793,11 +2919,7 @@ function openProtocolsModal() {
   // первым же нажатием «Сохранить».
   const known = ALL_PROTOCOLS.slice();
   for (const id of enabledP) if (!known.includes(id)) known.push(id);
-  document.getElementById('protocolsList').innerHTML = known.map(id => `
-    <label style="display:flex;align-items:center;gap:10px;cursor:pointer;">
-      <input type="checkbox" data-proto="${id}" ${enabledP.has(id) ? 'checked' : ''}>
-      <span>${escHtml(PROTO_LABELS[id] || id)}</span>
-    </label>`).join('');
+  document.getElementById('protocolsList').innerHTML = known.map(id => _protoPickRow(id, enabledP.has(id))).join('');
   const enabledPl = new Set(_serverConfig.enabled_platforms || ALL_PLATFORMS);
   document.getElementById('platformsList').innerHTML = ALL_PLATFORMS.map(id => `
     <label style="display:flex;align-items:center;gap:10px;cursor:pointer;">
@@ -3297,6 +3419,9 @@ async function psvcUninstall() {
   }
   closeModal('protoSvcModal');
   await loadServerConfig();
+  // Сервер уже убрал протокол из enabled_protocols — вкладку прячем сразу, а не
+  // после F5 (loadServerConfig сам видимость не применяет).
+  applyVisibilityFromConfig();
   await loadSystemVersions(true);
   refreshAll();
 }
@@ -3365,9 +3490,24 @@ PROTO_SVC.awg = {
   onMount: () => loadProtoPort('awg'),
   restartNote: 'Перезапуск опускает и поднимает интерфейс awg0 — все туннели разорвутся на пару секунд. ' +
                'Если интерфейс завис, панель удалит его через <code>ip link delete</code> и поднимет заново.',
-  uninstall: null,
-  uninstallNote: 'AmneziaWG ставится модулем ядра через DKMS. Снос из панели легко оставляет сервер без сети, ' +
-                 'поэтому кнопки удаления здесь нет — только вручную по ssh.',
+  install: async () => installProto('awg'),
+  uninstall: {
+    label: 'Удалить AmneziaWG с сервера',
+    body: 'Интерфейс awg0 будет опущен и выключен из автозапуска, UDP-порт закрыт в фаерволе, ' +
+          'пакеты AmneziaWG с модулем ядра удалены — это 1–3 минуты. Основную сеть сервера это не трогает. ' +
+          '<b>Все клиенты AmneziaWG сразу потеряют подключение.</b> Вкладка AmneziaWG скроется.',
+    run: async (purge) => {
+      const r = await fetch(API + '/api/service/uninstall', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({proto: 'awg', purge_data: purge}),
+      });
+      const j = await r.json().catch(() => ({ok: false, error: 'HTTP ' + r.status}));
+      if (!(j.ok && j.async)) return j;
+      // Снос модуля ядра идёт минутами — ждём фоновую задачу с шагами.
+      const done = await _pollDepFix('uninstall:awg', null, Date.now(), 'Удаление AmneziaWG', 20 * 60 * 1000);
+      return done.ok ? {ok: true, output: done.msg} : {ok: false, error: done.msg};
+    },
+  },
   afterAction: () => refreshStatus(),
 };
 
@@ -7068,11 +7208,15 @@ function renderXrayMaskHysteria(hy) {
   host.textContent = 'выключена';
   // Почему выключена: занятый порт называем прямо, иначе непонятно, это
   // решение пользователя или сбой.
+  // Порт занят, но свободный есть — это не сбой: «включить» сам поднимет вход на
+  // свободном (hyQuickEnable). Оранжевым — только когда свободного нет.
+  const alt = parseInt(hy.suggested_port, 10) || 0;
+  const soft = hy.port_taken_by && alt;
   const why = hy.port_taken_by
-    ? ('порт ' + (hy.port || '') + ' занят: ' + hy.port_taken_by)
+    ? (alt ? ('включится на UDP ' + alt) : ('порт ' + (hy.port || '') + ' занят: ' + hy.port_taken_by))
     : (hy.autoenable_note || '');
   meta.innerHTML =
-    (why ? '<span style="color:var(--orange);">' + escHtml(why) + '</span>' : '') +
+    (why ? '<span style="color:' + (soft ? 'var(--text3)' : 'var(--orange)') + ';">' + escHtml(why) + '</span>' : '') +
     '<a href="#" id="xrayHyEnableLink">включить</a>';
   const lnk = meta.querySelector('#xrayHyEnableLink');
   if (lnk) lnk.addEventListener('click', (e) => { e.preventDefault(); hyQuickEnable(hy); });
@@ -8302,6 +8446,7 @@ async function _pollDepFix(id, res, startedAt, hint, limitMs) {
       continue;  // панель могла на секунду перезапуститься — не считаем это провалом
     }
     if (job.steps && job.steps.length) _renderBusySteps(job.steps);
+    if (job.load) _renderBusyLoad(job.load);
     if (job.state === 'done' || job.state === 'error') _depsBadgeSoon();
     if (job.state === 'done') return {ok: true, msg: job.msg || ''};
     if (job.state === 'error') return {ok: false, msg: job.msg || 'не удалось'};
@@ -8314,8 +8459,9 @@ async function _pollDepFix(id, res, startedAt, hint, limitMs) {
     if (res) res.textContent = `Выполняется… ${sec} с`;
     // Счётчик дублируем в затемнение: строка под кнопкой им же и закрыта.
     const ovl = document.getElementById('panelRestartStatus');
-    if (ovl && hint) ovl.textContent = `${hint} · идёт ${sec} с`;
-    else if (ovl) ovl.textContent = `Идёт ${sec} с`;
+    const en = _i18nEn();
+    if (ovl && hint) ovl.textContent = en ? `${hint} · ${sec} s so far` : `${hint} · идёт ${sec} с`;
+    else if (ovl) ovl.textContent = en ? `${sec} s so far` : `Идёт ${sec} с`;
   }
   return {ok: false, msg: 'операция идёт дольше 5 минут — проверьте журнал сервиса'};
 }
@@ -13868,7 +14014,7 @@ async function _sdbLoad(openStat) {
   if (!_sdb.enabled) _sdnsTab('set');
   else if (openStat && !_sdnsPolling) _sdnsTab('stat');
   if (_sdb.enabled && _sdbSel) await _sdbLoadClient(_sdbSel);
-  if (_sdb.enabled) _sdbPaint();
+  if (_sdb.enabled) { if (_sdbQ) _sdbFetchMask(true); else _sdbPaint(); }
 }
 
 async function _sdbLoadClient(key) {
@@ -13885,7 +14031,7 @@ async function _sdbLoadClient(key) {
 
 function _sdbUnpick() {
   _sdbSel = _sdbC = null;
-  _sdbPaint();
+  if (_sdbQ) _sdbFetchMask(); else _sdbPaint();
 }
 
 async function _sdbPick(i) {
@@ -13898,7 +14044,7 @@ async function _sdbPick(i) {
     _sdbSel = key;
     await _sdbLoadClient(key);
   }
-  _sdbPaint();
+  if (_sdbQ) await _sdbFetchMask(); else _sdbPaint();
 }
 
 // Вкладки окна DNS: «Настройки» и «Статистика».
@@ -13914,7 +14060,74 @@ function _sdnsTab(kind) {
 function _sdbRange(n) {
   _sdbRng = n;
   try { localStorage.setItem('awgPanel:sdbRange', String(n)); } catch (_) {}
+  if (_sdbQ) {
+    document.querySelectorAll('#sdbSeg button').forEach(b => b.classList.toggle('on', +b.dataset.r === n));
+    _sdbFetchMask();
+  } else _sdbPaint();
+}
+
+// Поиск по маске в статистике: * — любые символы, ? — один; без звёздочки —
+// подстрока. Несколько масок через запятую/пробел — подходит любая. Считает
+// сервер (?q=): по доменам под маску пересобирается всё окно — плитки, пик,
+// сравнение с прошлым периодом, типы, компании, страны, клиенты.
+// _sdbF — статистика сервера под маску, _sdbFC — выбранного клиента под маску.
+let _sdbQ = '', _sdbQTimer = null, _sdbF = null, _sdbFC = null, _sdbFKey = '';
+function _sdbQInput() {
+  const v = document.getElementById('sdbQ').value;
+  document.getElementById('sdbQX').classList.toggle('hidden', !v);
+  clearTimeout(_sdbQTimer);
+  _sdbQTimer = setTimeout(() => { _sdbQ = v.trim(); _sdbFetchMask(); }, 300);
+}
+function _sdbQClear() {
+  const el = document.getElementById('sdbQ');
+  el.value = '';
+  _sdbQInput();
+  el.focus();
+}
+function _sdbBusy(on) {
+  const box = document.getElementById('sdbBox');
+  if (box) box.classList.toggle('sdb-busy', on);
+}
+async function _sdbFetchMask(force) {
+  if (!_sdbQ) {
+    _sdbF = _sdbFC = null;
+    _sdbFKey = '';
+    _sdbBusy(false);
+    _sdbPaint();
+    return;
+  }
+  const rng = [1, 7, 30].includes(_sdbRng) ? _sdbRng : 7;
+  const key = _sdbQ + '|' + (_sdbSel || '') + '|' + rng;
+  if (!force && key === _sdbFKey && _sdbF) { _sdbPaint(); return; }
+  _sdbFKey = key;
+  _sdbBusy(true);
+  // r — только открытый период: клиентов за прошлые дни сервер читает с диска.
+  const url = API + '/api/server-dns/blocked?q=' + encodeURIComponent(_sdbQ) + '&r=' + rng;
+  const get = async u => {
+    const r = await fetch(u);
+    const j = await r.json();
+    if (!r.ok || j.error) throw new Error(j.error || ('HTTP ' + r.status));
+    return j;
+  };
+  try {
+    const [f, fc] = await Promise.all([get(url), _sdbSel ? get(url + '&client=' + encodeURIComponent(_sdbSel)) : null]);
+    if (_sdbFKey !== key) return;          // пока ждали, маску уже поменяли
+    _sdbF = f;
+    _sdbFC = fc;
+  } catch (e) {
+    if (_sdbFKey !== key) return;
+    _sdbF = _sdbFC = null;
+    _sdbFKey = '';
+    toast('Не удалось применить поиск');
+  }
+  _sdbBusy(false);
   _sdbPaint();
+}
+// Счётчик в заголовке карточки: при поиске — «найдено / всего».
+function _sdbCnt(shown, total, masked) {
+  if (!total) return '';
+  const t = total.toLocaleString('ru-RU');
+  return '· ' + (masked ? shown.toLocaleString('ru-RU') + ' / ' + t : t);
 }
 
 function _sdbRows(el, rows, empty) {
@@ -13926,9 +14139,15 @@ function _sdbPaint() {
   if (!g) return;
   const rng = [1, 7, 30].includes(_sdbRng) ? _sdbRng : 7;
   // По клиенту — его соединения из журналов; «Топ клиентов» всегда общий.
-  const one = _sdbSel && _sdbC ? _sdbC : null;
-  const d = one ? Object.assign({}, g, {days: one.days, ranges: one.ranges, now: one.now || g.now}) : g;
+  // Поиск — те же данные, но только по доменам под маску (_sdbF/_sdbFC).
+  const M = _sdbQ && _sdbF ? _sdbF : null;
+  const base = M || g;
+  const oneRaw = _sdbSel && _sdbC ? _sdbC : null;
+  const one = oneRaw ? ((M && _sdbFC) || oneRaw) : null;
+  const src0 = one || base;
+  const d = Object.assign({}, g, {days: src0.days, ranges: src0.ranges, now: src0.now || g.now});
   const R = (d.ranges || {})[String(rng)] || {};
+  const R0 = ((oneRaw || g).ranges || {})[String(rng)] || {};     // без маски — для «найдено / всего»
   const PROTO = {xray: 'XRay', hy: 'Hysteria'};
   const selRow = one ? _sdbSel.split(':') : null;
   document.getElementById('sdbSel').innerHTML = one
@@ -13940,9 +14159,6 @@ function _sdbPaint() {
   document.getElementById('sdbTotalD').textContent = one ? 'к доменам' : 'к DNS сервера';
   document.getElementById('sdbShareD').textContent = one ? 'от соединений' : 'от всех запросов';
   document.querySelectorAll('#sdbSeg button').forEach(b => b.classList.toggle('on', +b.dataset.r === rng));
-  const since = d.since ? d.since.split('-').reverse().join('.') : '';
-  document.getElementById('sdbSub').textContent =
-    (d.provider ? d.provider + ' · ' : '') + (since ? 'считается с ' + since : 'счёт ещё не начался');
   document.getElementById('sdbWarn').innerHTML = d.log_ok === false
     ? '<div class="sdb-warn"><b>Счёт остановлен:</b> журнал dnsproxy не читается — скорее всего, после обновления dnsproxy поменялся формат записей. Цифры ниже — до остановки, DNS при этом работает. Напишите автору панели.</div>'
     : '';
@@ -13988,29 +14204,34 @@ function _sdbPaint() {
     `<span class="nm">${n}</span><span class="v">${_sdbFmt(v)}</span><span class="pc">${_sdbPct(v, Q)}</span></div>`), '');
 
   const noNames = d.stats_top === false ? 'Домены не запоминаются — включите «запоминать домены» вверху.' : '';
+  // Пусто из-за поиска — так и сказать, а не «запросов не было».
+  const noHit = 'Под маску ничего не подходит.';
 
   // --- Заблокированные домены ---
   const bl = R.blocked || [];
-  document.getElementById('sdbBlkCnt').textContent = bl.length ? '· ' + (R.blocked_count || bl.length).toLocaleString('ru-RU') : '';
+  document.getElementById('sdbBlkCnt').textContent =
+    _sdbCnt(R.blocked_count || bl.length, R0.blocked_count || (R0.blocked || []).length, !!M);
   _sdbRows('sdbBlk', bl.map(([n, c, x], i) =>
     `<div class="sdb-row sdb-r2"><span class="n">${i + 1}</span><span class="nm mono${x * 2 >= c && x ? ' x' : ''}" title="${escAttr(n)}">${escHtml(n)}</span>` +
     `<span class="blk">${_sdbFmt(c)}</span><span class="pc"></span></div>`),
-    noNames || 'За этот период ничего не заблокировано.');
+    noNames || (M ? noHit : 'За этот период ничего не заблокировано.'));
 
   // --- Топ доменов: всего / заблокировано / (доля) ---
   const dm = R.domains || [];
-  document.getElementById('sdbDomCnt').textContent = dm.length ? '· ' + (R.domains_count || dm.length).toLocaleString('ru-RU') : '';
+  document.getElementById('sdbDomCnt').textContent =
+    _sdbCnt(R.domains_count || dm.length, R0.domains_count || (R0.domains || []).length, !!M);
   _sdbRows('sdbDom', dm.map(([n, t, b]) =>
     `<div class="sdb-row sdb-r3"><span class="nm mono" title="${escAttr(n)}">${escHtml(n)}</span>` +
     `<span class="tot">${_sdbFmt(t)}</span><span class="blk">${_sdbFmt(b)}</span><span class="pc">(${_sdbPct(b, t) || '0%'})</span></div>`),
-    noNames || 'Запросов пока не было.');
+    noNames || (M ? noHit : 'Запросов пока не было.'));
 
   // --- Топ компаний ---
-  _sdbRows('sdbComp', (R.companies || []).map(([n, l, c, t, b]) =>
+  const cm = R.companies || [];
+  _sdbRows('sdbComp', cm.map(([n, l, c, t, b]) =>
     `<div class="sdb-row sdb-r3i"><span class="sdb-ic" style="background:${c}">${escHtml(l)}</span>` +
     `<span class="nm">${escHtml(n || 'Другие')}</span><span class="tot">${_sdbFmt(t)}</span><span class="blk">${_sdbFmt(b)}</span>` +
     `<span class="pc">(${_sdbPct(b, t) || '0%'})</span></div>`),
-    noNames || 'Запросов пока не было.');
+    noNames || (M ? noHit : 'Запросов пока не было.'));
 
   // --- Топ стран: куда уходили запросы (GeoIP адреса из ответа) ---
   const cn = R.countries || [];
@@ -14018,16 +14239,16 @@ function _sdbPaint() {
   _sdbRows('sdbCnt', cn.map(([cc, n]) =>
     `<div class="sdb-row sdb-r2i"><span class="sdb-ic sdb-cc">${escHtml(cc)}</span><span class="nm">${escHtml(_sdbCountry(cc))}</span>` +
     `<span class="tot">${_sdbFmt(n)}</span><span class="pc">${_sdbPct(n, cnT)}</span></div>`),
-    'Пока нет данных.');
+    M ? noHit : 'Пока нет данных.');
 
   // --- Топ клиентов: соединения из журналов XRay/Hysteria (всегда общий список) ---
   const src = (g.clients_src || []).map(p => PROTO[p] || p);
-  _sdbClList = ((g.ranges || {})[String(rng)] || {}).clients || [];
+  _sdbClList = ((base.ranges || {})[String(rng)] || {}).clients || [];
   _sdbRows('sdbCl', _sdbClList.map(([p, n, t, b], i) =>
     `<div class="sdb-row sdb-r3 sdb-click${_sdbSel === p + ':' + n ? ' on' : ''}" onclick="_sdbPick(${i})" title="Показать статистику этого клиента (повторный клик — весь сервер)">` +
-    `<span class="nm">${escHtml(n)} <span class="sdb-proto">${PROTO[p] || p}</span></span>` +
+    `<span class="nm sdb-nm-cl" title="${escAttr(n)}"><span class="t">${escHtml(n)}</span><span class="sdb-proto">${PROTO[p] || p}</span></span>` +
     `<span class="tot">${_sdbFmt(t)}</span><span class="blk">${_sdbFmt(b)}</span><span class="pc">(${_sdbPct(b, t) || '0%'})</span></div>`),
-    src.length ? 'Соединений клиентов к доменам пока не было.' : 'Нет журнала XRay или Hysteria — включите журнал в настройках протокола.');
+    M ? noHit : (src.length ? 'Соединений клиентов к доменам пока не было.' : 'Нет журнала XRay или Hysteria — включите журнал в настройках протокола.'));
 }
 
 async function _sdbTopToggle() {

@@ -1656,11 +1656,16 @@ def api_button():
 @_auth
 def api_blocked():
     """Статистика DNS: суммы по дням и списки за сегодня/7/30 дней.
-    ?client=proto:имя — то же по одному клиенту (из журналов XRay/Hysteria)."""
+    ?client=proto:имя — то же по одному клиенту (из журналов XRay/Hysteria).
+    ?q=маска — всё только по доменам под маску (поиск в окне)."""
     s = settings()
     client = (request.args.get('client') or '').strip()[:200]
+    mask = stats.mask_fn((request.args.get('q') or '')[:300])
     if client:
-        return jsonify(stats.client_snapshot(client))
+        return jsonify(stats.client_snapshot(client, mask))
+    if mask:
+        r = request.args.get('r') or ''
+        return jsonify(stats.snapshot(mask, (int(r),) if r in ('1', '7', '30') else (1, 7, 30)))
     out = stats.snapshot()
     out.update(enabled=bool(s.get('enabled')), stats_top=bool(s.get('stats_top', True)),
                provider=', '.join(e.get('provider') or e.get('host') or '' for e in parse_many(s.get('main') or '')

@@ -303,7 +303,8 @@
     var fr = st.installed ? (st.front || '') : (st.front_want || '');
     var modeEl = document.getElementById('tgMode');
     if (modeEl) {
-      modeEl.textContent = FRONT_LABEL[fr] || (st.front_reason ? 'занят' : '—');
+      modeEl.textContent = FRONT_LABEL[fr] ||
+        (st.front_reason === 'no_cert' ? 'нет домена' : (st.front_reason ? 'занят' : '—'));
       modeEl.className = 'value ' + (fr ? 'green' : 'orange');
     }
     set('tgModeSub', fr ? (FRONT_SUB[fr] || '') : (REASON_SHORT[st.front_reason] || ''));

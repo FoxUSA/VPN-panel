@@ -1177,16 +1177,32 @@ def _ver_tuple(v):
     return tuple(int(x) for x in m.groups()) if m else None
 
 
-def hop_supported():
-    """(можно, почему нет). Бинарь достаточно свежий и есть чем ставить редирект."""
+def hop_supported(install=False):
+    """(можно, почему нет). Бинарь достаточно свежий и есть чем ставить редирект.
+
+    install=True — при установке и включении хоппинга: на урезанных образах VDS
+    нет ни nft, ни iptables (так было 20.11.2026), и без этого Hysteria молча
+    вставала без хоппинга. Ставим iptables сами; из опроса состояния — никогда.
+    """
     ver = installed_version()
     if ver and _ver_tuple(ver) < _ver_tuple(HOP_MIN_VERSION):
         return False, ('нужна Hysteria %s или новее (установлена %s) — обновите её в блоке версий'
                        % (HOP_MIN_VERSION, ver))
     out, _, _ = run_cmd('command -v nft || command -v iptables')
+    if not out.strip() and install:
+        run_cmd('DEBIAN_FRONTEND=noninteractive apt-get install -y iptables >/dev/null 2>&1')
+        out, _, _ = run_cmd('command -v nft || command -v iptables')
+        if out.strip():
+            audit('info', '[Hysteria] поставлен iptables — без него не работает хоппинг портов')
     if not out.strip():
-        return False, 'нет ни nft, ни iptables — hysteria нечем перенаправить диапазон портов'
+        return False, (_HOP_NO_TOOL if not install else
+                       'на сервере нет iptables, и поставить его не удалось — хоппинг портов недоступен')
     return True, ''
+
+
+# Нет iptables, но ставить его ещё не пробовали: включение хоппинга поставит сам,
+# поэтому для экрана настроек это не «нельзя» (см. hop_state).
+_HOP_NO_TOOL = 'на сервере нет iptables — панель поставит его при включении'
 
 
 def _parse_range(text):
@@ -1291,7 +1307,7 @@ def set_hop(enabled):
     old = dict(cfg)
     old_rng = hop_active(cfg)
     if enabled:
-        ok, why = hop_supported()
+        ok, why = hop_supported(install=True)
         if not ok:
             return False, why
         rng = _parse_range(cfg.get('hop_range'))
@@ -1333,6 +1349,8 @@ def set_hop(enabled):
 def hop_state():
     cfg = load_settings()
     ok, why = hop_supported() if bin_installed() else (True, '')
+    if why == _HOP_NO_TOOL:
+        ok, why = True, ''
     return {
         'enabled': bool(cfg.get('hop_enabled')),
         'active': hop_active(cfg),
@@ -1397,7 +1415,7 @@ def setup(cfg=None):
     # Новая установка — сразу с хоппингом: ссылок ещё никто не получал, а для РФ
     # это главная защита UDP от удушения. На существующих серверах включается
     # кнопкой (плашка в «Чтобы Hysteria заработала»), молча не трогаем.
-    if fresh and 'hop_enabled' not in cfg and hop_supported()[0]:
+    if fresh and 'hop_enabled' not in cfg and hop_supported(install=True)[0]:
         rng, _ = pick_hop_range(cfg.get('port'))
         if rng:
             cfg.update({'hop_enabled': True, 'hop_range': rng, 'hop_interval': HOP_DEFAULT_INTERVAL})

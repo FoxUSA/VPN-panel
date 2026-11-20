@@ -109,6 +109,10 @@ def register(app):
     def tgweb_uninstall():
         data = request.get_json(silent=True) or {}
         service.uninstall(purge_data=bool(data.get('purge_data')))
+        # Как у XRay/MTProto/AmneziaWG: протокол убирается из отображаемых.
+        hook = DEPS.get('proto_uninstalled')
+        if hook:
+            hook()
         return jsonify({'ok': True})
 
     @app.route('/api/tgweb/slug', methods=['POST'])

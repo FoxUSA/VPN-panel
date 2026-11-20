@@ -108,7 +108,8 @@ STATE_FILE = ''             # старый единый файл (до 17.11.202
 STATS_DIR = ''              # data/server_dns/stats/YYYY-MM-DD.json — по файлу на день
 _lock = threading.Lock()
 # days[YYYY-MM-DD] = {q,b,x: [24 часа], top: {блок-имя: n}, topx: {имя: n 18+}, qt: {имя: n запросов},
-#                     cn: {cc: n}, cl: {"proto:имя": [соединений, из них на заблокированные]},
+#                     cn: {cc: n}, dc: {имя: cc — страна его адреса, для поиска по маске},
+#                     cl: {"proto:имя": [соединений, из них на заблокированные]},
 #                     cd: {"proto:имя": {t, b, x, d: {домен: [соединений, блок]}, cn: {cc: n}}}}
 # cd (подробно по клиентам) держим в памяти только за сегодня и вчера: старые дни
 # читаются с диска, когда открывают конкретного клиента.
@@ -197,6 +198,8 @@ def init(state_dir, settings_fn, geo_fn=None, xray_log='', hy_log='', hy_names=N
     _load_days()
     # Что блокировалось за последние дни — чтобы клиенты сразу считались после рестарта.
     now = time.time()
+    for k in sorted(_data['days']):
+        _name_cc.update(_data['days'][k].get('dc') or {})
     for k in sorted(_data['days'])[-2:]:
         b = _data['days'][k]
         tx = b.get('topx') or {}
@@ -293,7 +296,7 @@ def parse_lines(lines, now=None, keep_top=True):
     now = now or time.time()
     day, hour = _day(now)
     q = blk = adl = 0
-    top, topx, qt, cn = {}, {}, {}, {}
+    top, topx, qt, cn, dc = {}, {}, {}, {}, {}
     watch = False
     last_geo = ''                # имя, по которому страну уже взяли (в ответе бывает несколько A)
     for raw in lines:
@@ -341,6 +344,8 @@ def parse_lines(lines, now=None, keep_top=True):
                     if len(_name_cc) > 100000:
                         _name_cc.clear()
                     _name_cc[n] = cc
+                    if keep_top:
+                        dc[n] = cc
             continue
         _blocked_seen[n] = (now, adult)
         if keep_top:
@@ -359,10 +364,14 @@ def parse_lines(lines, now=None, keep_top=True):
             _add(b.setdefault('topx', {}), topx)
             _add(b.setdefault('qt', {}), qt)
             _add(b.setdefault('cn', {}), cn)
+            if dc:
+                b.setdefault('dc', {}).update(dc)
             if len(b['top']) > TOP_KEEP * 2:
                 b['top'] = _trim(b['top'], TOP_KEEP)
                 b['topx'] = {k: v for k, v in b['topx'].items() if k in b['top']}
             b['qt'] = _trim(b['qt'], QT_KEEP)
+            if len(b.get('dc') or {}) > QT_KEEP * 2:
+                b['dc'] = {k: v for k, v in b['dc'].items() if k in b['qt'] or k in b['top']}
             _dirty = True
             _dirty_days.add(day)
     return q, blk, adl
@@ -563,10 +572,12 @@ def forget_top():
     """Тумблер «запоминать домены» выключили — стереть уже накопленные имена (и на диске)."""
     global _dirty
     with _lock:
+        _name_cc.clear()
         for b in _data['days'].values():
             b['top'] = {}
             b['topx'] = {}
             b['qt'] = {}
+            b.pop('dc', None)
             for c in (b.get('cd') or {}).values():
                 c['d'] = {}
         _cd_cache.clear()
@@ -576,6 +587,7 @@ def forget_top():
         if not b:
             continue
         b['top'], b['topx'], b['qt'] = {}, {}, {}
+        b.pop('dc', None)
         for c in (b.get('cd') or {}).values():
             c['d'] = {}
         _write_day(k, b)
@@ -648,8 +660,97 @@ def _lists(q, top, topx, qt, cn, cl):
     }
 
 
-def snapshot():
-    """Для /api/server-dns/blocked: суммы по дням и списки за 1/7/30 дней."""
+def mask_fn(q):
+    """Маска поиска (как в окне): * — любые символы, ? — один, без них — подстрока.
+    Несколько масок через запятую/пробел — подходит любая. Пусто → None."""
+    parts = [x for x in re.split(r'[\s,;]+', (q or '').lower()) if x][:20]
+    if not parts:
+        return None
+    res = []
+    for x in parts:
+        body = re.escape(x).replace(r'\*', '.*').replace(r'\?', '.')
+        res.append(re.compile('^' + body + '$' if ('*' in x or '?' in x) else body))
+    return lambda n: any(r.search(n) for r in res)
+
+
+def _sub(d, m):
+    return {k: v for k, v in (d or {}).items() if m(k)}
+
+
+def _masked_day(b, m):
+    """День сервера только по доменам под маску: суммы и словари."""
+    qt, top, topx = _sub(b.get('qt'), m), _sub(b.get('top'), m), _sub(b.get('topx'), m)
+    dc = b.get('dc') or {}
+    q, cn = 0, {}
+    for n in set(qt) | set(top):
+        t = max(qt.get(n, 0), top.get(n, 0))
+        q += t
+        ok = t - top.get(n, 0)          # страну считали только по незаблокированным ответам
+        cc = dc.get(n) or _name_cc.get(n)
+        if cc and ok > 0:
+            cn[cc] = cn.get(cc, 0) + ok
+    nb = sum(top.values())
+    nx = min(sum(topx.values()), nb)
+    return {'q': q, 'b': nb - nx, 'x': nx}, qt, top, topx, cn
+
+
+def _masked_cl(cd, m):
+    """Клиенты за день только по соединениям к доменам под маску."""
+    out = {}
+    for k, c in (cd or {}).items():
+        t = bl = 0
+        for h, v in (c.get('d') or {}).items():
+            if m(h):
+                t += v[0]
+                bl += v[1]
+        if t:
+            out[k] = [t, bl]
+    return out
+
+
+def _snapshot_masked(m, rngs=(1, 7, 30)):
+    now = time.time()
+    need = set(_range_days(now, max(rngs)))
+    days, per, cds = {}, {}, {}
+    with _lock:
+        for k, b in _data['days'].items():
+            days[k], qt, top, topx, cn = _masked_day(b, m)
+            if k in need:
+                per[k] = (qt, top, topx, cn)
+                if 'cd' in b:
+                    cds[k] = _masked_cl(b.get('cd'), m)
+        since = _data['since']
+    # Клиенты за прошлые дни — с диска (в памяти только сегодня и вчера).
+    for k in need:
+        if k in per and k not in cds:
+            cds[k] = _masked_cl((_read_day(k) or {}).get('cd'), m)
+    ranges = {}
+    for rng in rngs:
+        top, topx, qt, cn, cl = {}, {}, {}, {}, {}
+        q = 0
+        for k in _range_days(now, rng):
+            if k not in per:
+                continue
+            dq, dt, dx, dn = per[k]
+            _add(qt, dq)
+            _add(top, dt)
+            _add(topx, dx)
+            _add(cn, dn)
+            q += days[k]['q']
+            for c, (t, bl) in (cds.get(k) or {}).items():
+                v = cl.setdefault(c, [0, 0])
+                v[0] += t
+                v[1] += bl
+        ranges[str(rng)] = _lists(q, top, topx, qt, cn, cl)
+    return {'since': since, 'today': _day(now)[0], 'days': days, 'ranges': ranges, 'now': int(now)}
+
+
+def snapshot(mask=None, rngs=(1, 7, 30)):
+    """Для /api/server-dns/blocked: суммы по дням и списки за 1/7/30 дней.
+    mask — функция mask_fn(): всё только по доменам под маску; rngs — какие
+    периоды собрать (поиску нужен только открытый: клиенты за прошлые дни с диска)."""
+    if mask:
+        return _snapshot_masked(mask, rngs)
     now = time.time()
     with _lock:
         days = {k: {'q': sum(b['q']), 'b': sum(b['b']), 'x': sum(b['x'])} for k, b in _data['days'].items()}
@@ -697,12 +798,29 @@ def _client_day(day, key):
     return c
 
 
-def client_snapshot(key):
-    """То же, что snapshot(), но по одному клиенту ("proto:имя"): соединения из журналов."""
+def _client_masked(c, m):
+    """День клиента только по доменам под маску; страны — по стране домена."""
+    d = _sub(c.get('d'), m)
+    t = sum(v[0] for v in d.values())
+    bl = sum(v[1] for v in d.values())
+    x = sum(v[2] for v in d.values() if len(v) > 2)
+    cn = {}
+    for h, v in d.items():
+        cc = _name_cc.get(h)
+        if cc:
+            cn[cc] = cn.get(cc, 0) + v[0]
+    return {'t': t, 'b': bl, 'x': x, 'd': d, 'cn': cn}
+
+
+def client_snapshot(key, mask=None):
+    """То же, что snapshot(), но по одному клиенту ("proto:имя"): соединения из журналов.
+    mask — только соединения к доменам под маску."""
     now = time.time()
     with _lock:
         all_days = sorted(_data['days'])
     per = {k: _client_day(k, key) for k in all_days[-60:]}
+    if mask:
+        per = {k: _client_masked(c, mask) for k, c in per.items() if c}
     days = {k: {'q': c['t'], 'b': max(0, c['b'] - c.get('x', 0)), 'x': c.get('x', 0)}
             for k, c in per.items() if c}
     ranges = {}

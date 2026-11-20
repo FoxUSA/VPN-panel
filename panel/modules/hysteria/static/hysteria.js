@@ -292,6 +292,10 @@
     // Баннер нужен не только когда бинаря нет, но и когда сервис лежит: иначе
     // после неудачной установки кнопка исчезала и повторить попытку было нечем.
     var banner = document.getElementById('hyNotInstalled');
+    // Бинаря нет — на вкладке только баннер (CSS .proto-absent в index.html):
+    // плитки и список без протокола показывали бы выдуманное.
+    var hySec = document.getElementById('sectionHysteria');
+    if (hySec && !state.stale) hySec.classList.toggle('proto-absent', !st.installed);
     if (banner) {
       var needsAction = !st.installed || !st.active;
       banner.classList.toggle('hidden', !needsAction);

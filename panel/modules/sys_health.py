@@ -184,6 +184,109 @@ def _health_proc_count():
     except Exception:
         return None
 
+# --- Нагрузка во время долгой операции панели ---------------------------------
+# Сборка модуля ядра идёт минутами, и всё это время шаг на экране не меняется:
+# похоже на зависание. Опрос fix-status (раз в 2 с) получает снимок — процессор,
+# память и какие программы сейчас работают, — и человек видит, что сервер занят.
+
+_LIVE_LOCK = threading.Lock()
+_LIVE_PREV = {}
+
+# Имя процесса (comm) → то, что поймёт человек. Подбор по точному имени и по началу.
+_LIVE_NAMES = (
+    (('cc1', 'cc1plus', 'gcc', 'cc', 'x86_64-linux-gnu-gcc', 'aarch64-linux-gnu-gcc'), 'компилятор C'),
+    (('ld', 'ld.bfd', 'ld.gold', 'collect2'), 'компоновщик'),
+    (('modpost', 'objtool', 'genksyms', 'fixdep'), 'сборка модуля ядра'),
+    (('make',), 'сборка (make)'),
+    (('dkms',), 'DKMS'),
+    (('apt', 'apt-get', 'dpkg', 'dpkg-deb', 'store', 'gpgv'), 'установка пакетов'),
+    (('http', 'https'), 'загрузка пакетов'),
+    (('curl', 'wget'), 'загрузка файлов'),
+    (('unzip', 'tar', 'gzip', 'xz', 'zstd'), 'распаковка'),
+    (('openssl', 'certbot'), 'сертификат'),
+    (('depmod', 'modprobe', 'insmod'), 'загрузка модуля'),
+    (('systemctl', 'systemd'), 'systemd'),
+)
+_LIVE_PREFIX = (('x86_64-linux-gnu-', 'компилятор C'), ('aarch64-linux-gnu-', 'компилятор C'))
+
+
+def _live_label(comm):
+    for names, label in _LIVE_NAMES:
+        if comm in names:
+            return label
+    for pre, label in _LIVE_PREFIX:
+        if comm.startswith(pre):
+            return label
+    return comm
+
+
+def _live_procs():
+    """{pid: (comm, utime+stime в тиках)} по /proc. Сама панель не в счёт."""
+    me = os.getpid()
+    out = {}
+    for n in os.listdir('/proc'):
+        if not n.isdigit() or int(n) == me:
+            continue
+        try:
+            with open(f'/proc/{n}/stat') as f:
+                s = f.read()
+        except Exception:
+            continue
+        l, r = s.find('('), s.rfind(')')
+        if l < 0 or r < 0:
+            continue
+        rest = s[r + 2:].split()
+        try:
+            out[int(n)] = (s[l + 1:r], int(rest[11]) + int(rest[12]))
+        except (IndexError, ValueError):
+            continue
+    return out
+
+
+def live_load():
+    """Снимок нагрузки: {'cpu': %, 'mem_used', 'mem_total', 'top': [{name, comm, n, pct}]}.
+
+    Проценты — от всего процессора сервера (все ядра = 100), чтобы строки
+    процессов и общая шкала читались в одних единицах. Разница считается от
+    прошлого вызова; первый вызов (или после долгой паузы) меряет 0,4 с сам.
+    """
+    def sample():
+        return time.time(), _health_read_cpu_stat().get('cpu'), _live_procs()
+
+    with _LIVE_LOCK:
+        prev = _LIVE_PREV.get('s')
+        if not prev or time.time() - prev[0] > 15:
+            prev = sample()
+            time.sleep(0.4)
+        cur = sample()
+        _LIVE_PREV['s'] = cur
+    ncpu = os.cpu_count() or 1
+    hz = os.sysconf('SC_CLK_TCK') if hasattr(os, 'sysconf') else 100
+    dt = max(cur[0] - prev[0], 0.05)
+    groups = {}
+    for pid, (comm, ticks) in cur[2].items():
+        old = prev[2].get(pid)
+        d = ticks - old[1] if old and old[0] == comm else 0
+        if d <= 0:
+            continue
+        pct = d / hz / dt / ncpu * 100
+        g = groups.setdefault(_live_label(comm), {'comm': comm, 'n': 0, 'pct': 0.0})
+        g['n'] += 1
+        g['pct'] += pct
+    top = sorted(({'name': k, 'comm': v['comm'], 'n': v['n'], 'pct': round(min(v['pct'], 100.0))}
+                  for k, v in groups.items() if v['pct'] >= 2),
+                 key=lambda x: -x['pct'])[:3]
+    out = {'cpu': _health_cpu_pct(prev[1], cur[1]), 'cores': ncpu, 'top': top}
+    try:
+        mi = _health_read_meminfo()
+        total = mi.get('MemTotal', 0)
+        out['mem_total'] = total
+        out['mem_used'] = max(0, total - mi.get('MemAvailable', mi.get('MemFree', 0)))
+    except Exception:
+        pass
+    return out
+
+
 def _read_system_health():
     out = {}
     # uptime

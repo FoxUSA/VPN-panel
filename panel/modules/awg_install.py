@@ -239,8 +239,11 @@ def install(progress, add_repo=True):
 
     # 5. Сборка модуля — самый долгий шаг, минуты.
     progress(4, 'run', 'компиляция под текущее ядро, это занимает несколько минут')
+    # iptables — тем же заходом: PostUp конфига включает им NAT. На урезанных
+    # образах VDS его нет, и awg-quick поднимал интерфейс и тут же удалял его
+    # («iptables: command not found», 20.11.2026). Стоит — apt ничего не тронет.
     rc, out = _sh('DEBIAN_FRONTEND=noninteractive apt-get install -y '
-                  'amneziawg amneziawg-dkms amneziawg-tools 2>&1 | tail -n 20', timeout=1800)
+                  'amneziawg amneziawg-dkms amneziawg-tools iptables 2>&1 | tail -n 20', timeout=1800)
     st = detect()
     if not st['module_built']:
         dkms = _sh('cat /var/lib/dkms/amneziawg/*/build/make.log 2>/dev/null | tail -n 20')[1]
@@ -260,8 +263,21 @@ def install(progress, add_repo=True):
     # 7. Конфиг
     progress(6, 'run')
     if st['config_ok']:
-        progress(6, 'ok', 'уже есть, не трогаем')
         port = _D['get_awg_port']()
+        # Конфиг остался от прошлой установки (удаление без «удалить данные»), а его
+        # порт за это время занял другой сервис — Hysteria на 443, например.
+        # Поднимать на занятом нельзя: интерфейс упадёт с «Address already in use».
+        free, _ = _D['pick_free_port'](int(port or 0), 'udp', 'awg')
+        if port and free and int(free) != int(port):
+            with open(_D['awg_config']) as f:
+                body = f.read()
+            body = re.sub(r'(?m)^(\s*ListenPort\s*=\s*)\d+', r'\g<1>%d' % int(free), body)
+            with open(_D['awg_config'], 'w') as f:
+                f.write(body)
+            progress(6, 'ok', f'прежний конфиг; UDP {port} занят — взят {free}, клиентам выдайте конфиги заново')
+            port = free
+        else:
+            progress(6, 'ok', 'прежний конфиг с клиентами, не трогаем')
     else:
         ok, res = _write_server_config()
         if not ok:
@@ -284,8 +300,9 @@ def install(progress, add_repo=True):
     rc, out = _sh('systemctl start awg-quick@awg0 2>&1', timeout=90)
     if _sh('ip link show awg0 >/dev/null 2>&1')[0] != 0:
         jrn = _sh('journalctl -u awg-quick@awg0 -n 20 --no-pager 2>&1 | tail -n 20')[1]
-        progress(8, 'fail', (out or jrn)[-400:])
-        return False, 'интерфейс awg0 не поднялся:\n' + (jrn or out)[-1000:]
+        head = _up_fail_head(jrn or out)
+        progress(8, 'fail', head + '\n' + (jrn or out)[-400:])
+        return False, head + '\n' + (jrn or out)[-1000:]
     progress(8, 'ok', 'awg0 поднят')
 
     # 10. Проверка
@@ -299,6 +316,22 @@ def install(progress, add_repo=True):
     _D['audit']('info', f'AmneziaWG установлен из панели: модуль {final["module_version"]}, порт {port}')
     return True, (f'AmneziaWG установлен: модуль {final["module_version"]}, интерфейс awg0 поднят, '
                   f'UDP-порт {port}. Можно добавлять клиентов.')
+
+
+def _up_fail_head(log):
+    """Первая строка ошибки запуска awg0 — человеку; журнал идёт следом под «Подробности».
+
+    Раньше первой строкой шёл обрывок журнала («ost awg-quick[…]: [#] …»),
+    из которого причину не понять."""
+    log = log or ''
+    m = re.search(r'([\w.-]+): command not found', log)
+    if m:
+        return f'интерфейс awg0 не поднялся: на сервере нет программы {m.group(1)}'
+    if re.search(r'Address already in use', log, re.I):
+        return 'интерфейс awg0 не поднялся: UDP-порт занят другой программой'
+    if re.search(r'Unknown device type|Protocol not supported|amneziawg.*not found', log, re.I):
+        return 'интерфейс awg0 не поднялся: модуль ядра amneziawg не загружен'
+    return 'интерфейс awg0 не поднялся'
 
 
 def _write_server_config():
@@ -356,6 +389,73 @@ def _write_server_config():
         with open('/etc/sysctl.d/99-awg-panel.conf', 'w') as f:
             f.write('# awg-panel: форвардинг для туннеля AmneziaWG\nnet.ipv4.ip_forward=1\n')
     return True, port
+
+
+# === Сценарий удаления =====================================================
+
+UNINSTALL_STEPS = [
+    'Остановка интерфейса awg0',
+    'Закрытие порта в фаерволе',
+    'Удаление пакетов (модуль ядра DKMS)',
+    'Конфиг и клиенты',
+]
+
+
+def uninstall(progress, purge=False, data_dirs=()):
+    """Снос AmneziaWG. Основную сеть сервера не трогает: awg0 — отдельный
+    интерфейс, PostDown убирает только свои правила iptables.
+
+    purge=False — awg0.conf (ключ сервера и все клиенты) остаётся: повторная
+    установка поднимет тот же сервер, и выданные конфиги снова заработают.
+    purge=True — конфиг и данные панели по AWG удаляются безвозвратно.
+    Репозиторий ppa:amnezia/ppa оставляем: он ничему не мешает, а повторная
+    установка без него на шаг длиннее.
+    """
+    cfg_path = _D.get('awg_config') or ''
+    port = 0
+    try:
+        port = int(_D['get_awg_port']() or 0)
+    except Exception:
+        pass
+
+    progress(0, 'run')
+    _sh('systemctl disable --now awg-quick@awg0 2>&1', timeout=60)
+    if _sh('ip link show awg0 >/dev/null 2>&1')[0] == 0:
+        _sh('ip link delete awg0 2>&1')
+    if _sh('ip link show awg0 >/dev/null 2>&1')[0] == 0:
+        progress(0, 'fail', 'интерфейс awg0 не удаляется')
+        return False, 'интерфейс awg0 не удалось опустить — удаление остановлено, ничего не снесено'
+    progress(0, 'ok', 'awg0 опущен, автозапуск выключен')
+
+    progress(1, 'run')
+    if port and _sh('command -v ufw >/dev/null 2>&1')[0] == 0:
+        _sh(f'ufw delete allow {port}/udp 2>&1')
+        progress(1, 'ok', f'закрыт UDP-порт {port}')
+    else:
+        progress(1, 'skip', 'ufw не установлен' if port else 'порт неизвестен')
+
+    progress(2, 'run', 'удаление модуля и пересборка образа загрузки ядра, 1–3 минуты')
+    rc, out = _sh('DEBIAN_FRONTEND=noninteractive apt-get purge -y '
+                  'amneziawg amneziawg-dkms amneziawg-tools 2>&1 | tail -n 15', timeout=1200)
+    _sh('rmmod amneziawg 2>/dev/null')
+    if detect()['bin_ok']:
+        progress(2, 'fail', out[-400:])
+        return False, 'apt не удалил пакеты AmneziaWG:\n' + out[-1000:]
+    progress(2, 'ok', 'пакеты удалены')
+
+    progress(3, 'run')
+    if purge:
+        import shutil
+        for d in [os.path.dirname(cfg_path)] + list(data_dirs or []):
+            if d and os.path.isdir(d):
+                shutil.rmtree(d, ignore_errors=True)
+        progress(3, 'ok', 'конфиг сервера и данные клиентов удалены')
+        tail = 'Конфиг и клиенты удалены.'
+    else:
+        progress(3, 'ok', f'оставлены на сервере: {cfg_path}')
+        tail = 'Конфиг с клиентами оставлен — при повторной установке выданные конфиги снова заработают.'
+    _D['audit']('warn', 'AmneziaWG удалён из панели' + (' вместе с клиентами' if purge else ''))
+    return True, f'AmneziaWG удалён с сервера. {tail}'
 
 
 # === Сценарий обновления ===================================================

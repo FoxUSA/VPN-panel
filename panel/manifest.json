@@ -1,6 +1,6 @@
 {
-  "version": "2.5.7",
-  "released": "2026-11-18",
+  "version": "2.5.8",
+  "released": "2026-11-20",
   "proto_limits": {
     "2.3.10": {
       "xray": "26.11.9",

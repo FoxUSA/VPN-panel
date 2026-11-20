@@ -454,8 +454,41 @@ def mtg_set_prefer_ip(value):
     with open(MTG_CONFIG, 'w') as f:
         f.writelines(out)
 
+# Сайт маскировки, когда пользователь его не задавал и своего домена нет.
+MTG_DEFAULT_FAKE_HOST = 'www.bing.com'
+
+
+def mtg_fake_host_for_secret():
+    """Домен маскировки для нового секрета — панель выбирает его сама.
+
+    Задан в настройках — берём его. Иначе: свой домен, если XRay стоит на нём в
+    TLS (несостоявшееся рукопожатие mtg отдаёт на этот адрес — пусть это будет
+    собственный сайт), а без домена — нейтральный крупный сайт. Выбор сохраняем
+    в server.json: перегенерация секрета должна дать тот же домен.
+
+    Пустым он быть не может: `mtg generate-secret --hex` без имени падает, и на
+    сервере без server.json (шаг инструкции необязательный) установка MTProto
+    заканчивалась «не удалось сгенерировать секрет»."""
+    host = (SERVER_CFG.get('mtg_fake_host') or '').strip()
+    if not re.match(r'^[A-Za-z0-9.-]+$', host):
+        host = ''
+        try:
+            xp = get_xray_inbound_params() or {}
+            if xp.get('security') == 'tls' and re.match(r'^[A-Za-z0-9.-]+$', (xp.get('sni') or '').strip()):
+                host = xp['sni'].strip()
+        except Exception:
+            pass
+        host = host or MTG_DEFAULT_FAKE_HOST
+        SERVER_CFG['mtg_fake_host'] = host
+        try:
+            _save_server_config(SERVER_CFG)
+        except Exception:
+            pass
+    return host
+
+
 def mtg_generate_secret():
-    stdout, _, rc = run_cmd(f'{MTG_BIN} generate-secret --hex {SERVER_CFG.get("mtg_fake_host", MTG_FAKE_HOST)}')
+    stdout, _, rc = run_cmd(f'{MTG_BIN} generate-secret --hex {mtg_fake_host_for_secret()}')
     if rc != 0 or not stdout:
         raise RuntimeError('mtg generate-secret failed')
     return stdout.strip()

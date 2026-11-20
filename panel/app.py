@@ -716,7 +716,7 @@ def _load_admin():
         hint = os.path.join(os.path.dirname(ADMIN_FILE), 'first_login.txt')
         with open(hint, 'w', encoding='utf-8') as f:
             f.write(f'Пароль первого входа в панель: {first_pass}\n'
-                    'Смените его в панели — после смены этот файл можно удалить.\n')
+                    'Смените его в панели — после смены этот файл удалится сам.\n')
         os.chmod(hint, 0o600)
     except Exception:
         hint = '(не удалось записать файл)'
@@ -1153,6 +1153,7 @@ PANEL_LOGS_DIR = DATA_LOGS_DIR   # единый источник правды с
 # (как XRay делает в XRAY_GLOBAL_TOTALS_DB).
 AWG_TOTALS_DB = os.path.join(DATA_AWG_DIR, 'totals.json')
 XRAY_ACCESS_LOG = f'{PANEL_LOGS_DIR}/xray_access.log'
+XRAY_ERROR_LOG = f'{PANEL_LOGS_DIR}/xray_error.log'
 MTG_ACCESS_LOG = f'{PANEL_LOGS_DIR}/mtg_access.log'
 # Пути и интервал сбора destinations живут в awg_dest_log.py — фича владеет ими целиком.
 AWG_ACCESS_LOG = f'{PANEL_LOGS_DIR}/awg_access.log'
@@ -2132,9 +2133,8 @@ def service_action():
     return jsonify({'ok': True, **st})
 
 
-# Что именно панель сносит при удалении протокола. AWG в списке нет намеренно:
-# он ставится модулем ядра (DKMS), и снос из панели легко оставляет сервер без
-# сети — там только инструкция.
+# Что именно панель сносит при удалении протокола. AWG здесь нет: его снос —
+# пошаговый сценарий awg_install.uninstall (пакеты DKMS удаляются минутами).
 PROTO_UNINSTALL = {
     'xray': {
         'units': ['xray'],
@@ -2154,6 +2154,16 @@ PROTO_UNINSTALL = {
 }
 
 
+def _proto_uninstalled(proto):
+    """Протокол больше не установлен — прячем его вкладку, иначе панель сама себе
+    нарисует предупреждение «включён, но не установлен»."""
+    enabled = SERVER_CFG.get('enabled_protocols')
+    if isinstance(enabled, list) and proto in enabled:
+        SERVER_CFG['enabled_protocols'] = [p for p in enabled if p != proto]
+        _save_server_config(SERVER_CFG)
+    _VERSION_CACHE.clear()
+
+
 @app.route('/api/service/uninstall', methods=['POST'])
 @login_required
 def service_uninstall():
@@ -2165,6 +2175,18 @@ def service_uninstall():
     body = request.get_json(force=True) or {}
     proto = (body.get('proto') or '').strip()
     purge = bool(body.get('purge_data'))
+    if proto == 'awg':
+        if not awg_install:
+            return jsonify({'ok': False, 'error': 'модуль awg_install.py не загружен'}), 500
+
+        def _awg_uninstall(progress):
+            ok, msg = awg_install.uninstall(progress, purge=purge,
+                                            data_dirs=[DATA_AWG_DIR] if purge else [])
+            if ok:
+                _proto_uninstalled('awg')
+            return ok, msg
+        return jsonify(_dep_fix_job_start('uninstall:awg', _awg_uninstall,
+                                          steps=awg_install.UNINSTALL_STEPS))
     spec = PROTO_UNINSTALL.get(proto)
     if not spec:
         return jsonify({'ok': False, 'error': 'Этот протокол из панели не удаляется'}), 400
@@ -2186,14 +2208,7 @@ def service_uninstall():
         if data_dir:
             shutil.rmtree(data_dir, ignore_errors=True)
 
-    # Протокол больше не установлен — прячем его вкладку, иначе панель сама себе
-    # нарисует предупреждение «включён, но не установлен».
-    enabled = SERVER_CFG.get('enabled_protocols')
-    if isinstance(enabled, list) and proto in enabled:
-        SERVER_CFG['enabled_protocols'] = [p for p in enabled if p != proto]
-        _save_server_config(SERVER_CFG)
-
-    _VERSION_CACHE.clear()
+    _proto_uninstalled(proto)
     audit('warn', f'{PROTO_TITLES.get(proto, proto)} удалён с сервера'
                   f'{" вместе с данными панели" if purge else ""}')
     if proto == 'xray':
@@ -2212,6 +2227,12 @@ def server_config_get():
     cfg['panel_access'] = _panel_access_info()
     # Публичный адрес для клиентских ссылок и сайта-маскировки — без порта админки.
     cfg['public_access'] = _public_access_info()
+    # Свой домен = сертификат Let's Encrypt на сервере. От него зависит, что
+    # вообще можно предлагать: Telegram WEB без своего домена не работает, и окно
+    # первого входа не должно давать его выбрать (человека никто не спрашивал про
+    # домен, а вкладка потом встречала его «переключите XRay в TLS»).
+    _le = _find_le_cert()
+    cfg['tls_domain'] = _le[2] if _le else ''
     # Системная таймзона сервера — чтобы фронт показывал ВСЕ epoch-метки
     # (журнал, проверки) в системном времени сервера, а не в зоне браузера.
     lt = time.localtime()
@@ -4170,11 +4191,92 @@ def _find_client_by_token(token_clean):
 
 
 def _ensure_xray_log_dir():
-    """Создаёт каталог под access.log (идемпотентно, владельца не трогаем)."""
+    """Каталог журналов XRay и сами файлы. True — если что-то пришлось поправить.
+
+    Каталог остаётся root:root 755 (см. «Зависимости»). Официальный установщик
+    XTLS запускает xray от отдельного пользователя (xray, раньше nobody), а он
+    не может СОЗДАТЬ файл в чужом каталоге: «open …/xray_access.log: permission
+    denied», и сервис не стартует вовсе (так встал новый сервер 20.11.2026).
+    Поэтому файлы создаёт панель и отдаёт их пользователю сервиса — писать в
+    свой файл ему можно. XRay от root этого не нужно: файлы он создаёт сам.
+    XRay, поставленный самой панелью, работает от root (_xray_run_as_root) —
+    эта ветка для XRay, который поставили мимо панели."""
     try:
         os.makedirs(os.path.dirname(XRAY_ACCESS_LOG), exist_ok=True)
     except Exception:
         pass
+    user = (run_cmd('systemctl show -p User --value xray')[0] or '').strip()
+    if not user or user == 'root':
+        return False
+    try:
+        import pwd
+        pw = pwd.getpwnam(user)
+    except Exception:
+        return False
+    paths = {XRAY_ACCESS_LOG, XRAY_ERROR_LOG}
+    try:
+        log = (load_xray_config() or {}).get('log') or {}
+        for k in ('access', 'error'):
+            v = log.get(k) or ''
+            if v.startswith(PANEL_LOGS_DIR + '/'):
+                paths.add(v)
+    except Exception:
+        pass
+    fixed = False
+    for path in paths:
+        try:
+            if not os.path.exists(path):
+                open(path, 'a').close()
+                fixed = True
+            if os.stat(path).st_uid != pw.pw_uid:
+                os.chown(path, pw.pw_uid, pw.pw_gid)
+                fixed = True
+        except Exception:
+            pass
+    return fixed
+
+
+XRAY_USER_DROPIN = '/etc/systemd/system/xray.service.d/20-awg-panel-user.conf'
+
+
+def _xray_run_as_root():
+    """XRay, который ставит панель, работает от root — как на остальных её серверах.
+
+    Официальный установщик XTLS запускает сервис от отдельного пользователя
+    (xray, раньше nobody). Такому XRay недоступны ни журнал в каталоге панели,
+    ни сертификат в /etc/letsencrypt (каталоги 0700 root): в Reality он падал
+    на журнале, в TLS упал бы на сертификате — то есть не стартовал вовсе.
+    Права процесса и так урезаны юнитом (CapabilityBoundingSet, NoNewPrivileges).
+    Drop-in, а не правка юнита: установщик переписывает xray.service при каждом
+    запуске, а соседние drop-in не трогает. True — если пользователя сменили."""
+    user = (run_cmd('systemctl show -p User --value xray')[0] or '').strip()
+    if not user or user == 'root':
+        return False
+    try:
+        os.makedirs(os.path.dirname(XRAY_USER_DROPIN), exist_ok=True)
+        with open(XRAY_USER_DROPIN, 'w') as f:
+            f.write('# awg-panel: XRay читает сертификат домена и пишет журнал в каталог панели.\n'
+                    '[Service]\nUser=root\nGroup=root\n')
+        run_cmd('systemctl daemon-reload')
+        audit('info', f'XRay переведён на запуск от root (был «{user}»): иначе ему недоступны журнал и сертификат')
+        return True
+    except Exception as e:
+        audit('warn', f'XRay: не удалось записать {XRAY_USER_DROPIN}: {e}')
+        return False
+
+
+def _xray_fail_msg():
+    """Ошибка «XRay не запустился»: первая строка — человеку, журнал — в «Подробности».
+    Хвост журнала целыми строками: обрезка по символам давала первой строкой обрывок
+    вида «00 myhost systemd[1]: …»."""
+    out = run_cmd('journalctl -u xray -n 20 --no-pager')[0] or ''
+    lines = [ln for ln in out.splitlines() if ln.strip()]
+    head = 'сервис XRay не запустился'
+    for ln in reversed(lines):
+        if 'permission denied' in ln.lower():
+            head = 'сервис XRay не запустился: нет прав на файл'
+            break
+    return head + ('\n' + '\n'.join(lines[-15:]) if lines else '')
 
 def _reconcile_access_log_cfg(cfg):
     """Idempotently выставляет log.access/loglevel на уже загруженном cfg-dict.
@@ -7098,7 +7200,10 @@ def _tgweb_dep_items():
         desc = ('Новый тип прокси Telegram: трафик идёт обычным HTTPS через ваш домен на 443 и по отпечатку '
                 'не отличается от браузера. Панель поставит движок telemt и nginx, подключит их к XRay и '
                 'проверит цепочку целиком.')
-        if mode != 'tls':
+        if not _find_le_cert():
+            desc += (' На этом сервере нет сертификата домена: Telegram WEB работает только на своём '
+                     'домене, без него установка невозможна.')
+        elif mode != 'tls':
             desc += (' Сейчас XRay на 443 в режиме %s — установка остановится на первом шаге: нужен TLS '
                      'с сертификатом домена.' % (mode.upper() or 'не установлен'))
         return [{'id': 'proto_tgweb_missing', 'level': 'tip', 'name': 'Telegram WEB-прокси не установлен',
@@ -7516,7 +7621,7 @@ def _xray_base_config(port, inbound):
     return {
         'log': {
             'access': XRAY_ACCESS_LOG,
-            'error': f'{PANEL_LOGS_DIR}/xray_error.log',
+            'error': XRAY_ERROR_LOG,
             'loglevel': 'warning',
         },
         'stats': {},
@@ -7576,8 +7681,14 @@ def _install_xray():
             ok, msg = _tgweb_before_xray()
             if not ok:
                 return False, msg
-            run_cmd('systemctl enable --now xray')
+            _ensure_xray_log_dir()
+            run_cmd('systemctl reset-failed xray')
+            run_cmd('systemctl enable xray')
+            run_cmd('systemctl restart xray')
             _tgweb_reconcile_later()
+            time.sleep(2)
+            if run_cmd('systemctl is-active xray')[0].strip() != 'active':
+                return False, _xray_fail_msg()
             return True, 'XRay уже настроен — конфиг не трогали, сервис запущен'
     cert = _find_le_cert()
     if cert:
@@ -7648,14 +7759,15 @@ def _install_xray():
     os.makedirs(os.path.dirname(XRAY_CONFIG), exist_ok=True)
     save_xray_config(cfg)
     ensure_firewall_port(port, 'tcp', 'XRay (awg-panel)')
+    _xray_run_as_root()
+    _ensure_xray_log_dir()
     run_cmd('systemctl enable xray')
     run_cmd('systemctl restart xray')
     _tgweb_reconcile_later()
     time.sleep(2)
     state, _, _ = run_cmd('systemctl is-active xray')
     if state.strip() != 'active':
-        out, _, _ = run_cmd('journalctl -u xray -n 20 --no-pager')
-        return False, f'сервис не поднялся: {out[-800:]}'
+        return False, _xray_fail_msg()
     # Reality на 443 терминирует TLS сам и до панели уже ничего не доходит —
     # без своего порта админ потеряет доступ ровно в этот момент.
     if not cert and port == 443 and not int(SERVER_CFG.get('panel_port') or 0):
@@ -7748,6 +7860,13 @@ def api_dep_fix_status():
     dep_id = (request.args.get('id') or '').strip()
     with _DEP_FIX_LOCK:
         job = dict(_DEP_FIX_JOBS.get(dep_id) or {'state': 'idle', 'msg': ''})
+    # Пока операция идёт — снимок нагрузки сервера: шаг сборки модуля ядра стоит
+    # минутами, и по процессору и списку программ видно, что сервер работает.
+    if job.get('state') == 'running' and sys_health:
+        try:
+            job['load'] = sys_health.live_load()
+        except Exception:
+            pass
     return jsonify(job)
 
 
@@ -8252,6 +8371,11 @@ PORT_CANDIDATES = {
     # AmneziaWG, а его сокет живёт в ядре и в `ss` бывает без имени процесса —
     # поэтому порт AWG докладывается в extra_busy отдельно, по awg0.conf.
     'hysteria': [443, 8443, 2053, 2083, 2096],
+    # AmneziaWG — тоже UDP и тоже начинает с 443, но ему всё равно, на каком
+    # порту жить. Без этого списка у AWG не было запасных вовсе: стоило Hysteria
+    # занять 443/udp первой, и установка AWG падала «не нашлось свободного порта».
+    # Номера не пересекаются с запасными Hysteria.
+    'awg': [443, 4443, 5443, 6443, 7443],
     # Порт панели: 443 сюда не входит принципиально — он и так занят XRay, ради
     # чего вся эта история и затевается.
     'panel': [2096, 8081, 2087, 2053, 9443],
@@ -11044,6 +11168,25 @@ if xdns:
     threading.Thread(target=_xdns_boot_heal, daemon=True).start()
 
 
+def _xray_log_boot_heal():
+    """Журналы XRay под пользователя сервиса (см. _ensure_xray_log_dir). Если
+    пришлось поправить, а XRay лежит (failed) — поднимаем: упал он, скорее всего,
+    именно из-за этого. inactive (выключен руками) не трогаем."""
+    time.sleep(6)
+    try:
+        if not os.path.exists(XRAY_BIN) or not _ensure_xray_log_dir():
+            return
+        if run_cmd('systemctl is-active xray')[0].strip() == 'failed':
+            run_cmd('systemctl reset-failed xray')
+            run_cmd('systemctl restart xray')
+            audit('info', 'XRay лежал: не мог открыть свой журнал — права на файлы журнала исправлены, ядро поднимается')
+    except Exception as e:
+        audit('warn', f'XRay: проверка прав на журнал на старте: {e}')
+
+
+threading.Thread(target=_xray_log_boot_heal, daemon=True).start()
+
+
 PANEL_FIRST_PORT = 8081
 
 
@@ -12153,6 +12296,27 @@ except Exception as _sd_err:
     print(f'[server_dns] отключён: {_sd_err}', flush=True)
 
 
+def _awg_pick_port(preferred, proto='udp', kind='awg'):
+    """Порт для новой AmneziaWG — так, чтобы порядок установки ничего не решал.
+
+    443/udp нужнее Hysteria: снаружи её трафик на 443 — обычный HTTP/3, а AWG
+    маскируется иначе и от номера порта не зависит. Поэтому: Hysteria уже стоит
+    (даже остановленная) — её порт занят; Hysteria выбрана на этом сервере, но
+    ещё не поставлена — 443 оставляем ей, AWG берёт следующий свободный. Раньше
+    443 доставался тому, кого поставили первым, и знать об этом было неоткуда."""
+    busy = []
+    try:
+        from modules.hysteria import load_settings as _hy_load
+        from modules.hysteria import service as _hy_svc
+        if _hy_svc.bin_installed():
+            busy.append(int(_hy_load().get('port') or 0))
+        elif 'hysteria' in (SERVER_CFG.get('enabled_protocols') or []):
+            busy.append(443)
+    except Exception:
+        pass
+    return pick_free_port(preferred, proto, kind, extra_busy=busy)
+
+
 # === Установка/обновление AmneziaWG (awg_install.py) ========================
 try:
     from modules import awg_install
@@ -12163,7 +12327,7 @@ try:
         'awg_config': AWG_CONFIG,
         'awg_bin': AWG_BIN,
         'get_awg_port': get_awg_port,
-        'pick_free_port': pick_free_port,
+        'pick_free_port': lambda preferred, proto='udp', kind='awg': _awg_pick_port(preferred, proto, kind),
         'ensure_firewall_port': ensure_firewall_port,
         'awg_params_fallback': _AWG_PARAMS_FALLBACK,
         'awg_param_keys': _AWG_PARAM_KEYS,
@@ -12216,6 +12380,8 @@ try:
     hysteria_pkg.register(app, {
         'login_required': login_required,
         'audit': audit,
+        # Удалили протокол — то же, что у остальных: вкладка уходит из видимых.
+        'proto_uninstalled': lambda: _proto_uninstalled('hysteria'),
         # Не get_xray_sni(): в Reality он отдаёт домен прикрытия, и ссылки
         # Hysteria уходили бы на чужой хост. Источник тот же, что у инбаунда.
         'server_host': _hy_public_host,
@@ -12295,6 +12461,7 @@ try:
     from modules import tgweb as tgweb_pkg
 
     tgweb_pkg.register(app, {
+        'proto_uninstalled': lambda: _proto_uninstalled('tgweb'),
         'panel_443_release': _panel_443_release,
         # Метка доверенного прокси для входа по IP (location / → панель).
         'proxy_trust_line': proxy_trust_nginx_line,
