@@ -2,6 +2,7 @@
    regenerate from source extraction. Loaded before i18n.js. */
 window.I18N_EN = {
   exact: {
+  "Замер раз в 10 секунд, история хранится 180 дней. Пик — самый высокий 10-секундный замер за период, ромб на графике — его момент. Стрелка у среднего — сдвиг к такому же периоду до него. Наведите на график или коснитесь его, чтобы увидеть значения.": "Sampled every 10 seconds, history is kept for 180 days. Peak is the highest 10-second sample in the period; the diamond on the chart marks when it happened. The arrow next to the average is the change against the same period right before. Hover over or tap a chart to see the values.",
   "Своего домена на сервере нет — это нормально. XRay и Hysteria замаскируются под чужие сайты, вход в панель останется по IP. Домен можно подключить позже — шаг «Домен и HTTPS» инструкции.": "This server has no domain of its own, and that is fine. XRay and Hysteria will disguise themselves as third-party sites, the panel stays reachable by IP. A domain can be added later — the «Domain and HTTPS» step of the guide.",
   "Найден сертификат домена": "Found a certificate for the domain",
   ": XRay встанет на этом домене в режиме TLS, панель откроется по https.": ": XRay will run on this domain in TLS mode, the panel will open over https.",
@@ -250,7 +251,7 @@ window.I18N_EN = {
   "История копится: замер раз в 10 секунд, первая точка графика появится через минуту после запуска панели.": "History is being collected: one sample every 10 seconds, the first chart point appears a minute after the panel starts.",
   "среднее": "average",
   "Средняя нагрузка (load average)": "Load average",
-  "Очередь задач к процессору. Оранжевый пунктир — число ядер: выше него задачи ждут.": "The CPU task queue. The orange dashed line is the number of cores: above it, tasks wait.",
+  "Очередь задач к процессору. Оранжевая линия — число ядер: выше неё задачи ждут.": "The CPU task queue. The orange line is the number of cores: above it, tasks wait.",
   "подкачка": "swap",
   "Занятая память без кэша — кэш система отдаёт программам по требованию.": "Used memory without cache — the system hands cache over to programs on demand.",
   "Трафик за период:": "Traffic for the period:",

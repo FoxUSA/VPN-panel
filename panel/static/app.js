@@ -8604,7 +8604,7 @@ function switchHealthTab(kind) {
   if (kind === 'mon') loadProbeInfo();
   if (kind === 'fw') loadFirewall();
   // Графики рисуются по ширине контейнера — у скрытой вкладки она нулевая.
-  if (kind === 'load' && _hhData) _hhPaint();
+  if (kind === 'load') _hhPaint();
 }
 
 // ============================================================
@@ -8941,36 +8941,6 @@ async function fwSaveJail(jail) {
   loadFirewall();
 }
 
-function _paintHealth(h) {
-  const box = document.getElementById('healthBody');
-  if (box) box.innerHTML = renderHealth(h);
-}
-
-async function loadHealth(opts) {
-  opts = opts || {};
-  const box = document.getElementById('healthBody');
-  if (!opts.silent && box && !box.hasChildNodes()) {
-    box.innerHTML = '<div style="color:var(--text3);">…</div>';
-  }
-  if (!opts.silent) _spinBtn('healthReloadBtn', true, 'Обновляем…');
-  try {
-    const r = await fetch(API + '/api/system/health', {credentials: 'same-origin'});
-    if (!r.ok) {
-      if (!opts.silent && box) box.innerHTML = '<div style="color:var(--red);">Ошибка ' + r.status + '</div>';
-      return;
-    }
-    const h = await r.json();
-    _writeModalCache('health', h);
-    _paintHealth(h);
-  } catch (e) {
-    if (!opts.silent && box && !box.hasChildNodes()) {
-      box.innerHTML = '<div style="color:var(--red);">Сеть: ' + escHtml(e.message) + '</div>';
-    }
-  } finally {
-    _spinBtn('healthReloadBtn', false);
-  }
-}
-
 // === Вкладка «Мониторинг» ===================================================
 // Показывает реквизиты, которые надо перенести в утилиту мониторинга на другом
 // сервере, и краткую инструкцию по её установке. Подробности — в УСТАНОВКА.md
@@ -9133,136 +9103,32 @@ function _paintProbeInfo() {
   }
 }
 
-function _hBarColor(pct) {
-  if (pct == null) return 'var(--text3)';
-  if (pct >= 90) return 'var(--red)';
-  if (pct >= 75) return '#e0a800';
-  return 'var(--accent)';
-}
-
-function _hBar(pct) {
-  const p = (pct == null) ? 0 : Math.max(0, Math.min(100, pct));
-  const label = (pct == null) ? '—' : pct + '%';
-  return `<div class="health-bar"><div class="health-bar-fill" style="width:${p}%;background:${_hBarColor(pct)};"></div><span class="health-bar-label">${label}</span></div>`;
-}
-
-function _hUptime(sec) {
-  if (sec == null) return '—';
-  sec = Math.floor(sec);
-  const d = Math.floor(sec / 86400);
-  const hh = Math.floor((sec % 86400) / 3600);
-  const mm = Math.floor((sec % 3600) / 60);
-  const en = _i18nEn();
-  const parts = [];
-  if (d) parts.push(d + (en ? 'd' : 'д'));
-  if (hh || d) parts.push(hh + (en ? 'h' : 'ч'));
-  parts.push(mm + (en ? 'm' : 'м'));
-  return parts.join(' ');
-}
-
-function _hRate(bps) {
-  return formatBytesShort(bps) + '/с';
-}
-
-function renderHealth(h) {
-  if (!h || h.ok === false) {
-    return '<div style="color:var(--red);">' + escHtml((h && h.error) || 'нет данных') + '</div>';
-  }
-  const mem = h.mem || {};
-  const swap = h.swap || {};
-  const cpu = h.cpu || {};
-  const net = h.net || {};
-  const disks = h.disks || [];
-
-  // CPU
-  const cpuMeta = [];
-  const _en = _i18nEn();
-  if (cpu.cores) cpuMeta.push(cpu.cores + (_en ? ' cores' : ' ядер'));
-  if (cpu.freq_mhz) cpuMeta.push((cpu.freq_mhz >= 1000 ? (cpu.freq_mhz/1000).toFixed(2) + (_en ? ' GHz' : ' ГГц') : cpu.freq_mhz + (_en ? ' MHz' : ' МГц')));
-  if (cpu.temp_c != null) cpuMeta.push(cpu.temp_c + ' °C');
-  if (cpu.load) cpuMeta.push('load ' + cpu.load.join(' / '));
-  const perCore = (cpu.per_core && cpu.per_core.length)
-    ? `<div class="health-cores">${cpu.per_core.map((p,i) =>
-        `<div class="health-core" title="ядро ${i}: ${p}%"><div class="health-core-fill" style="height:${Math.max(2,p)}%;background:${_hBarColor(p)};"></div></div>`
-      ).join('')}</div>`
-    : '';
-  const cpuModel = cpu.model ? `<div class="health-sub">${escHtml(cpu.model)}</div>` : '';
-
-  // Сеть
-  const netRows = (net.interfaces || []).map(i => {
-    const _gb = _i18nEn() ? ' Gbit/s' : ' Гбит/с', _mb = _i18nEn() ? ' Mbit/s' : ' Мбит/с';
-    const spd = i.speed_mbps ? `<span class="health-pill">${i.speed_mbps >= 1000 ? (i.speed_mbps/1000)+_gb : i.speed_mbps+_mb}</span>` : '';
-    return `<div class="health-net-row">
-      <div class="health-net-name">${escHtml(i.iface)} ${spd}</div>
-      <div class="health-net-rates">
-        <span title="входящий поток">↓ ${escHtml(_hRate(i.rx_rate))}</span>
-        <span title="исходящий поток">↑ ${escHtml(_hRate(i.tx_rate))}</span>
-      </div>
-      <div class="health-sub">всего: ↓ ${escHtml(formatBytesShort(i.rx_bytes))} &middot; ↑ ${escHtml(formatBytesShort(i.tx_bytes))}</div>
-    </div>`;
-  }).join('') || '<div class="health-sub">нет интерфейсов</div>';
-
-  // Диски
-  const diskRows = disks.map(d => `
-    <div class="health-disk">
-      <div class="health-disk-head">
-        <span class="health-disk-mount">${escHtml(d.mount)}</span>
-        <span class="health-sub">${escHtml(d.fstype)} &middot; ${escHtml(formatBytesShort(d.used))} / ${escHtml(formatBytesShort(d.total))} &middot; свободно ${escHtml(formatBytesShort(d.free))}</span>
-      </div>
-      ${_hBar(d.percent)}
-    </div>`).join('') || '<div class="health-sub">диски не найдены</div>';
-
-  return `
-    <div class="health-grid">
-      <div class="health-card">
-        <div class="health-card-title">ОЗУ</div>
-        ${_hBar(mem.percent)}
-        <div class="health-sub">занято ${escHtml(formatBytesShort(mem.used))} из ${escHtml(formatBytesShort(mem.total))}</div>
-        <div class="health-sub">доступно ${escHtml(formatBytesShort(mem.available))}${mem.cached ? ' &middot; кеш ' + escHtml(formatBytesShort(mem.cached)) : ''}</div>
-        ${swap.total ? `<div class="health-sub" style="margin-top:8px;">Swap: ${escHtml(formatBytesShort(swap.used))} / ${escHtml(formatBytesShort(swap.total))} (${swap.percent}%)</div>` : ''}
-      </div>
-
-      <div class="health-card">
-        <div class="health-card-title">Процессор</div>
-        ${_hBar(cpu.usage_pct)}
-        ${cpu.load_pct != null ? `<div class="health-sub">нагрузка по load: ${cpu.load_pct}%</div>` : ''}
-        ${cpuMeta.length ? `<div class="health-sub">${cpuMeta.map(escHtml).join(' &middot; ')}</div>` : ''}
-        ${perCore}
-        ${cpuModel}
-      </div>
-
-      <div class="health-card">
-        <div class="health-card-title">Сеть</div>
-        <div class="health-net-total">
-          <span>↓ ${escHtml(_hRate(net.total_rx_rate || 0))}</span>
-          <span>↑ ${escHtml(_hRate(net.total_tx_rate || 0))}</span>
-        </div>
-        ${netRows}
-      </div>
-
-      <div class="health-card">
-        <div class="health-card-title">Диски</div>
-        ${diskRows}
-      </div>
-    </div>
-    <div class="health-footer">
-      Аптайм: ${escHtml(_hUptime(h.uptime_sec))}${h.proc_count != null ? ' &middot; процессов: ' + h.proc_count : ''}
-    </div>`;
-}
-
-// === История нагрузки: графики за период ===================================
-// Данные — /api/system/monitor?range=1h|24h|7d|30d|90d (modules/sys_health.py):
-// точки графика (среднее + пик за шаг), сводка за окно и за такое же окно до
-// него, рекорды за всё время. Порт страницы servermon, нарисованный в теме панели.
-let _hhRange = '24h', _hhData = null, _hhAt = 0, _hhResizeT = null;
+// === «Нагрузка»: процессор, память, сеть, диск, очередь к процессору =========
+// Вид — макет «Нагрузка сервера» v3 (D:\Dropbox\Python\app\.dev\здоровье сервера\mockup)
+// и страница servermon (servermon/web/monitor.js) — держать в синхроне.
+// Карточка: заголовок · статус → крупная цифра «сейчас» → шкала → две строки
+// пояснения → график за период → строка «среднее · пик». Жирное в карточке одно —
+// крупная цифра; на графике одна плавная линия среднего, пик — ромбом и числом.
+// Данные: /api/system/monitor?range= (modules/sys_health.py, сборщик раз в 10 с) —
+// «сейчас», точки, сводка за окно и за такое же окно до него, рекорды;
+// /api/system/health (опрос раз в 4 с) — подробности, которых у сборщика нет:
+// частота и температура, загрузка по ядрам, модель, прочие интерфейсы и разделы,
+// число процессов. Нет данных сборщика — цифры «сейчас» берутся отсюда же.
+let _hhRange = '24h', _hhData = null, _hhAt = 0, _hhResizeT = null, _hhErr = '';
+let _hLive = null, _hhStamp = 0;
 // Курсор на графике — автообновление не перерисовывает (иначе гаснет подсказка),
 // свежие данные рисуем, когда курсор уйдёт.
 let _hhHover = false, _hhPending = false;
 try { const r = localStorage.getItem('awgPanel:healthRange'); if (r) _hhRange = r; } catch (_) {}
 
-const _HH_PREV_NAME = {'1h': 'Прошлый час', '24h': 'Прошлые 24 ч', '7d': 'Прошлые 7 дней',
-                       '30d': 'Прошлые 30 дней', '90d': 'Прошлые 90 дней'};
-const _hhLong = r => r === '7d' || r === '30d' || r === '90d';   // точки часовые — подписи датами
+const _hhL = (ru, en) => _i18nEn() ? en : ru;
+const _HH_PER = {'1h': ['час', 'hour'], '24h': ['24 часа', '24 hours'], '7d': ['7 дней', '7 days'],
+                 '30d': ['30 дней', '30 days'], '90d': ['90 дней', '90 days']};
+const _HH_PREV = {'1h': ['прошлый час', 'previous hour'], '24h': ['прошлые 24 часа', 'previous 24 hours'],
+                  '7d': ['прошлые 7 дней', 'previous 7 days'], '30d': ['прошлые 30 дней', 'previous 30 days'],
+                  '90d': ['прошлые 90 дней', 'previous 90 days']};
+const _hhPer = r => _hhL(...(_HH_PER[r] || _HH_PER['24h']));
+const _hhLong = r => r === '7d' || r === '30d' || r === '90d';   // подписи оси — датами
 
 function hhSetRange(rng) {
   _hhRange = rng;
@@ -9283,31 +9149,57 @@ async function loadHealthHist() {
   const box = document.getElementById('healthHist');
   if (!box) return;
   _hhAt = Date.now();
-  if (!box.hasChildNodes()) {
+  if (!_hhData) {
     const cached = _readModalCache('healthHist:' + rng);
     if (cached && cached.series) { _hhData = cached; _hhPaint(); }
-    else box.innerHTML = '<div class="health-sub">…</div>';
   }
   try {
     const r = await fetch(API + '/api/system/monitor?range=' + rng, {credentials: 'same-origin'});
     if (rng !== _hhRange) return;              // пока шёл запрос, переключили период
     const d = await r.json().catch(() => null);
     if (!r.ok || !d || d.ok === false) {
-      if (!_hhData) box.innerHTML = '<div class="health-sub" style="color:var(--red);">' +
-        escHtml((d && d.error) || ('Ошибка ' + r.status)) + '</div>';
-      return;
+      _hhErr = (d && d.error) || (_hhL('ошибка ', 'error ') + r.status);
+    } else {
+      _hhErr = '';
+      _hhData = d;
+      _hhStamp = Date.now();
+      _writeModalCache('healthHist:' + rng, d);
     }
-    _hhData = d;
-    _writeModalCache('healthHist:' + rng, d);
-    if (_hhHover) _hhPending = true; else _hhPaint();
   } catch (e) {
-    if (!_hhData) box.innerHTML = '<div class="health-sub" style="color:var(--red);">Сеть: ' + escHtml(e.message) + '</div>';
+    _hhErr = e.message;
+  }
+  if (_hhHover) _hhPending = true; else _hhPaint();
+}
+
+function _paintHealth(h) {
+  _hLive = (h && h.ok !== false) ? h : null;
+  if (_hLive) _hhStamp = Date.now();
+  if (_hhHover) _hhPending = true; else _hhPaint();
+}
+
+async function loadHealth(opts) {
+  opts = opts || {};
+  if (!opts.silent) {
+    _spinBtn('healthReloadBtn', true, 'Обновляем…');
+    loadHealthHist();
+  }
+  try {
+    const r = await fetch(API + '/api/system/health', {credentials: 'same-origin'});
+    if (r.ok) {
+      const h = await r.json();
+      _writeModalCache('health', h);
+      _paintHealth(h);
+    }
+  } catch (_) {
+    // Подробности не дошли — карточки живут на данных сборщика.
+  } finally {
+    _spinBtn('healthReloadBtn', false);
   }
 }
 
 window.addEventListener('resize', () => {
   const m = document.getElementById('healthModal');
-  if (!_hhData || !m || m.classList.contains('hidden')) return;
+  if (!m || m.classList.contains('hidden')) return;
   clearTimeout(_hhResizeT);
   _hhResizeT = setTimeout(_hhPaint, 150);
 });
@@ -9331,124 +9223,220 @@ function _hhT(t, withDate) {
 }
 const _hhDay = t => { const d = new Date(t * 1000), p = x => String(x).padStart(2, '0');
   return p(d.getDate()) + '.' + p(d.getMonth() + 1); };
+function _hhCores(n) {
+  if (_i18nEn()) return n + (n === 1 ? ' core' : ' cores');
+  const m10 = n % 10, m100 = n % 100;
+  return n + (m10 === 1 && m100 !== 11 ? ' ядро' : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? ' ядра' : ' ядер');
+}
+function _hhUptime(sec) {
+  sec = Math.max(0, Math.floor(sec || 0));
+  const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60);
+  if (d > 0) return _hhL(`${d} дн ${h} ч`, `${d} d ${h} h`);
+  if (h > 0) return _hhL(`${h} ч ${m} мин`, `${h} h ${m} min`);
+  return _hhL(`${m} мин`, `${m} min`);
+}
+function _hhSpeed(mbps) {
+  if (!mbps) return '';
+  return mbps >= 1000 ? (mbps / 1000) + _hhL(' Гбит/с', ' Gbit/s') : mbps + _hhL(' Мбит/с', ' Mbit/s');
+}
 
 // Сдвиг к прошлому периоду: у процентов — в п.п., у остального — в %.
+// Нет прошлого периода или сдвиг мал — ничего не пишем.
 function _hhDelta(cur, prev, pct) {
-  if (prev == null || cur == null) return '<div class="hh-ms-d">нет данных</div>';
+  if (prev == null || cur == null) return '';
   const d = pct ? cur - prev : (prev > 0 ? (cur - prev) / prev * 100 : (cur > 0 ? 100 : 0));
-  if (Math.abs(d) < (pct ? 0.5 : 3)) return '<div class="hh-ms-d">≈ как раньше</div>';
-  const up = d > 0, v = Math.abs(d);
-  const txt = pct ? (v >= 10 ? Math.round(v) : v.toFixed(1)) + (_i18nEn() ? ' pp' : ' п.п.')
-                  : (v >= 999 ? '>999' : Math.round(v)) + '%';
-  return `<div class="hh-ms-d ${up ? 'up' : 'down'}">${up ? '▲ +' : '▼ −'}${txt}</div>`;
+  if (Math.abs(d) < (pct ? 0.5 : 3)) return '';
+  const v = Math.abs(d);
+  return (d > 0 ? '▲ ' : '▼ ') + (pct ? (v >= 10 ? Math.round(v) : v.toFixed(1)) + _hhL(' п.п.', ' pp')
+                                      : (v >= 999 ? '>999' : Math.round(v)) + '%');
 }
 
-// Три плашки: среднее (и сдвиг), пик (и когда), прошлый период.
-// name — чья метрика, когда в карточке их две (входящий/исходящий).
-function _hhStats(d, key, fmt, pct, name) {
-  const cur = d.cur.stats[key], prev = d.prev.stats[key];
-  const when = cur ? _hhT(cur.max_t, d.range !== '1h') : '—';
-  return `${name ? `<div class="hh-stats-n">${name}</div>` : ''}<div class="hh-stats">
-    <div class="hh-ms"><div class="hh-ms-l">Среднее</div>
-      <div class="hh-ms-v">${cur ? fmt(cur.avg) : '—'}</div>${_hhDelta(cur && cur.avg, prev && prev.avg, pct)}</div>
-    <div class="hh-ms"><div class="hh-ms-l">Пик</div>
-      <div class="hh-ms-v">${cur ? fmt(cur.max) : '—'}</div><div class="hh-ms-d">${when}</div></div>
-    <div class="hh-ms" title="${_HH_PREV_NAME[d.range] || ''}"><div class="hh-ms-l">Раньше</div>
-      <div class="hh-ms-v">${prev ? fmt(prev.avg) : '—'}</div>
-      <div class="hh-ms-d">${prev ? '<span>пик</span> ' + fmt(prev.max) : '<span>данных ещё нет</span>'}</div></div>
-  </div>`;
+// Строка «за период» под графиком: среднее (и сдвиг) + пик (и когда).
+// rows — строки графика: одна без имени или две с именами; st — ключ сводки.
+function _hhPeriod(d, rows) {
+  const named = rows.length > 1, per = _hhPer(d.range), pk = '<i class="hm-pk-g"></i>';
+  const prevName = _hhL(...(_HH_PREV[d.range] || _HH_PREV['24h']));
+  const cells = r => {
+    const c = d.cur.stats && d.cur.stats[r.st], p = d.prev && d.prev.stats && d.prev.stats[r.st];
+    const dl = _hhDelta(c && c.avg, p && p.avg, r.pct);
+    const tt = p ? _hhL(`${prevName}: среднее ${r.fmt(p.avg)}, пик ${r.fmt(p.max)}`, `${prevName}: average ${r.fmt(p.avg)}, peak ${r.fmt(p.max)}`)
+                 : _hhL('сравнить пока не с чем — история короче двух периодов', 'nothing to compare with yet — history is shorter than two periods');
+    return `<span class="v" title="${escHtml(tt)}">${c ? r.fmt(c.avg) : '—'}${dl ? `<em>${dl}</em>` : ''}</span>
+      <span class="v">${c ? r.fmt(c.max) : '—'}${c ? `<em>${_hhT(c.max_t, d.range !== '1h')}</em>` : ''}</span>`;
+  };
+  if (!named) return `<div class="hm-ft"><span class="h">${_hhL('Среднее за ' + per, 'Average, ' + per)}</span>` +
+    `<span class="h">${pk}${_hhL('Пик', 'Peak')}</span>${cells(rows[0])}</div>`;
+  return `<div class="hm-ft rows"><span class="h">${_hhL('За ' + per, 'Last ' + per)}</span>` +
+    `<span class="h">${_hhL('среднее', 'average')}</span><span class="h">${pk}${_hhL('пик', 'peak')}</span>
+    ${rows.map(r => `<span class="n">${r.name}</span>` + cells(r)).join('')}</div>`;
 }
 
-function _hhCard(title, sub, stats, chart) {
-  const legend = chart.series.map(s =>
-    `<span><i class="${s.dash ? 'dash' : ''}" style="border-color:${s.color}"></i>${escHtml(s.label)}</span>`).join('');
-  return {chart, html: `<div class="health-card hh-card">
-      <div class="health-card-title">${title}</div>
-      ${sub ? `<div class="health-sub hh-sub">${sub}</div>` : ''}
-      ${stats}
-      <div class="hh-legend">${legend}</div>
-      <div class="hh-chart" id="hhChart_${chart.id}"></div>
-    </div>`};
+const _hhLvl = (pct, warn, bad) => pct >= bad ? 'bad' : pct >= warn ? 'warn' : 'ok';
+
+function _hhCard(d, o) {
+  const st = o.lvl ? `<span class="hm-st ${o.lvl}"><i></i>${o.lvl === 'ok' ? _hhL('норма', 'normal') : o.lvlText}</span>` : '';
+  const meter = o.pct == null ? '<div class="hm-meter off"></div>'
+    : `<div class="hm-meter ${o.lvl || ''}"><i style="width:${Math.min(100, Math.max(0, o.pct)).toFixed(1)}%"></i></div>`;
+  const sub = o.sub.map(s => typeof s === 'string' ? `<div>${s}</div>`
+    : `<div title="${escHtml(s.title || '')}">${s.html}</div>`).join('');
+  return {chart: o.chart, html: `<div class="hm-card">
+    <div class="hm-top"><div class="hm-title">${o.title}</div>${st}</div>
+    <div class="hm-now">${o.now}</div>
+    ${meter}
+    <div class="hm-sub${o.subWrap ? ' wrap' : ''}">${sub}</div>
+    <div class="hm-chart" id="hhChart_${o.chart.id}"></div>
+    ${_hhPeriod(d, o.chart.rows)}
+  </div>`};
+}
+
+// «Сейчас», если сборщик ещё не отдал замер: из /api/system/health.
+function _hhNowFromLive(h, iface) {
+  if (!h) return null;
+  const c = h.cpu || {}, m = h.mem || {}, s = h.swap || {}, ld = c.load || [];
+  const root = (h.disks || []).find(x => x.mount === '/') || {};
+  const ifs = ((h.net || {}).interfaces || []).filter(i => i.iface !== 'lo');
+  const ni = ifs.find(i => i.iface === iface) || ifs.slice().sort((a, b) => b.rx_bytes - a.rx_bytes)[0] || {};
+  return {cpu: c.usage_pct || 0, load1: ld[0] || 0, load5: ld[1] || 0, load15: ld[2] || 0,
+    mem_total: m.total || 0, mem_used: m.used || 0, mem_cache: (m.cached || 0) + (m.buffers || 0),
+    swap_total: s.total || 0, swap_used: s.used || 0, rx: ni.rx_rate || 0, tx: ni.tx_rate || 0,
+    disk_used: root.used || 0, disk_total: root.total || 0, _live: true};
 }
 
 function _hhPaint() {
   const box = document.getElementById('healthHist');
-  const d = _hhData;
-  if (!box || !d) return;
+  if (!box) return;
   _hhSyncRangeBtns();
-  const info = d.info || {}, n = d.now || {};
-  const C1 = 'var(--accent)', C2 = 'var(--orange)';
-  if (!d.now && !(d.series || []).length) {
-    box.innerHTML = '<div class="health-sub hh-empty">История копится: замер раз в 10 секунд, первая точка ' +
-      'графика появится через минуту после запуска панели.</div>';
+  const h = _hLive, now = Math.floor(Date.now() / 1000);
+  const SPAN = {'1h': 3600, '24h': 86400, '7d': 604800, '30d': 2592000, '90d': 7776000};
+  const d = _hhData || {range: _hhRange, step: 60, series: [], records: {},
+    cur: {from: now - (SPAN[_hhRange] || 86400), to: now, stats: {}}, prev: {stats: {}}};
+  const info = d.info || {}, per = _hhPer(d.range), lc = h && h.cpu || {};
+  const n = d.now || _hhNowFromLive(h, info.iface);
+  const cores = info.cores || lc.cores || 0;
+  const KB = 1024, MB = 1048576;
+
+  // Шапка: когда обновлено, аптайм, процессы.
+  const meta = document.getElementById('hhMeta');
+  if (meta) {
+    const up = info.host_uptime_sec || (h && h.uptime_sec);
+    const parts = [];
+    if (_hhStamp) parts.push(_hhL('обновлено ', 'updated ') + new Date(_hhStamp).toLocaleTimeString(_i18nEn() ? 'en-GB' : 'ru-RU'));
+    if (up) parts.push(_hhL('без перезагрузки ', 'up ') + _hhUptime(up));
+    if (h && h.proc_count != null) parts.push(_hhL('процессов ', 'processes ') + h.proc_count);
+    meta.innerHTML = escHtml(parts.join(' · ')) +
+      (_hhErr ? ` <span class="hm-err">· ${escHtml(_hhL('история недоступна: ', 'history unavailable: ') + _hhErr)}</span>` : '');
+  }
+  if (!n) {
+    box.innerHTML = `<div class="hm-empty">${_hhErr ? escHtml(_hhErr) : _hhL('Первый замер через 10 секунд…', 'First sample in 10 seconds…')}</div>`;
     return;
   }
 
-  const cpu = _hhCard('Процессор', '', _hhStats(d, 'cpu', _hhPct, true),
-    {id: 'cpu', fmt: _hhPct, yMax: 100, series: [
-      {k: 'c', label: 'среднее', color: C1, area: true},
-      {k: 'cm', label: 'пик', color: C1, dash: true}]});
+  // Процессор
+  const cpuL = _hhLvl(n.cpu, 75, 90);
+  const ofCpu = [cores ? _hhCores(cores) : '', lc.freq_mhz ? (lc.freq_mhz >= 1000 ? (lc.freq_mhz / 1000).toFixed(2) + _hhL(' ГГц', ' GHz') : lc.freq_mhz + _hhL(' МГц', ' MHz')) : '',
+    lc.temp_c != null ? lc.temp_c + ' °C' : ''].filter(Boolean).join(' · ');
+  const pc = lc.per_core || [];
+  const coreBars = pc.length >= 2 && pc.length <= 16
+    ? `<span class="hm-cores" title="${escHtml(_hhL('Загрузка по ядрам: ', 'Per-core load: ') + pc.map(p => Math.round(p) + '%').join(' · '))}">` +
+      pc.map(p => `<i style="--v:${Math.max(2, Math.min(100, p))}%"></i>`).join('') + '</span>' : '';
+  const cpu = _hhCard(d, {title: _hhL('Процессор', 'CPU'), lvl: cpuL,
+    lvlText: cpuL === 'warn' ? _hhL('высокая загрузка', 'high load') : _hhL('перегружен', 'overloaded'), pct: n.cpu,
+    now: `<span class="hm-big">${_hhPct(n.cpu)}</span><span class="hm-of">${escHtml(ofCpu)}</span>${coreBars}`,
+    sub: [n.iowait != null ? _hhL(`ожидание диска ${_hhPct(n.iowait)} · отнято хостингом ${_hhPct(n.steal)}`,
+                                  `disk wait ${_hhPct(n.iowait)} · stolen by host ${_hhPct(n.steal)}`) : '',
+          lc.model ? {html: escHtml(lc.model), title: lc.model} : ''],
+    chart: {id: 'cpu', fmt: _hhPct, pctScale: true,
+      rows: [{k: 'c', peak: 'cm', label: _hhL('среднее', 'average'), st: 'cpu', fmt: _hhPct, pct: true}]}});
 
-  // Load average — очередь задач к процессору. Выше числа ядер — задачи ждут;
-  // пунктир на графике — эта граница.
-  const load = _hhCard('Средняя нагрузка (load average)',
-    'Очередь задач к процессору. Оранжевый пунктир — число ядер: выше него задачи ждут.',
-    _hhStats(d, 'load', _hhLoad, false),
-    {id: 'load', fmt: _hhLoad, ref: info.cores, series: [
-      {k: 'l', label: 'среднее', color: C1, area: true},
-      {k: 'lm', label: 'пик', color: C1, dash: true}]});
+  // Память
+  const memPct = n.mem_total ? n.mem_used / n.mem_total * 100 : 0, memL = _hhLvl(memPct, 80, 90);
+  const swapTxt = !n.swap_total ? _hhL('подкачки нет', 'no swap')
+    : n.swap_used > 0 ? _hhL(`подкачка ${_hhB(n.swap_used)} из ${_hhB(n.swap_total)}`, `swap ${_hhB(n.swap_used)} of ${_hhB(n.swap_total)}`)
+    : _hhL('подкачка не занята', 'swap unused');
+  const mem = _hhCard(d, {title: _hhL('Память', 'Memory'), lvl: memL,
+    lvlText: memL === 'warn' ? _hhL('мало свободной', 'running low') : _hhL('почти кончилась', 'almost full'), pct: memPct,
+    now: `<span class="hm-big">${_hhB(n.mem_used)}</span><span class="hm-of">${_hhL('из', 'of')} ${_hhB(n.mem_total)} · ${_hhPct(memPct)}</span>`,
+    sub: [_hhL(`доступно ${_hhB(n.mem_total - n.mem_used)} · кэш ${_hhB(n.mem_cache)}`,
+               `available ${_hhB(n.mem_total - n.mem_used)} · cache ${_hhB(n.mem_cache)}`), swapTxt],
+    chart: {id: 'mem', fmt: _hhB, yMax: n.mem_total,
+      rows: [{k: 'm', peak: 'mm', label: _hhL('среднее', 'average'), st: 'mem', fmt: _hhB}]}});
 
-  const memSeries = [{k: 'm', label: 'среднее', color: C1, area: true},
-                     {k: 'mm', label: 'пик', color: C1, dash: true}];
-  if (n.swap_total) memSeries.push({k: 's', label: 'подкачка', color: C2});
-  const ram = _hhCard('ОЗУ', 'Занятая память без кэша — кэш система отдаёт программам по требованию.',
-    _hhStats(d, 'mem', _hhB, false),
-    {id: 'mem', fmt: _hhB, yMax: n.mem_total, series: memSeries});
+  // Сеть: интерфейс маршрута по умолчанию; «зеркало» — входящий вверх, исходящий вниз.
+  // Прочие интерфейсы (туннели и т. п.) — строкой, в график не входят.
+  const lifs = ((h && h.net) || {}).interfaces || [];
+  const mainIf = lifs.find(i => i.iface === info.iface);
+  const others = lifs.filter(i => i.iface !== info.iface && i.iface !== 'lo')
+    .sort((a, b) => (b.rx_rate + b.tx_rate) - (a.rx_rate + a.tx_rate))
+    .map(i => `${i.iface}: ↓ ${_hhRate(i.rx_rate)} · ↑ ${_hhRate(i.tx_rate)}`);
+  const sp = mainIf && _hhSpeed(mainIf.speed_mbps);
+  const net = _hhCard(d, {title: _hhL('Сеть', 'Network') + (info.iface ? ` <small>· ${escHtml(info.iface)}${sp ? ' · ' + sp : ''}</small>` : ''),
+    now: `<span class="hm-big">↓ ${_hhRate(n.rx)}</span><span class="hm-big">↑ ${_hhRate(n.tx)}</span>`,
+    sub: [d.cur.samples ? _hhL(`за ${per} прошло ↓ ${_hhB(d.cur.rx_bytes)} · ↑ ${_hhB(d.cur.tx_bytes)}`,
+                               `last ${per}: ↓ ${_hhB(d.cur.rx_bytes)} · ↑ ${_hhB(d.cur.tx_bytes)}`) : '',
+          others.length ? {html: escHtml(_hhL('ещё ', 'also ') + others.join('; ')), title: others.join('\n')} : ''],
+    chart: {id: 'net', fmt: _hhRate, mirror: true, floor: MB, rows: [
+      {k: 'rx', peak: 'rxm', label: _hhL('входящий', 'incoming'), name: _hhL('↓ входящий', '↓ incoming'), st: 'rx', fmt: _hhRate},
+      {k: 'tx', peak: 'txm', label: _hhL('исходящий', 'outgoing'), name: _hhL('↑ исходящий', '↑ outgoing'), st: 'tx', fmt: _hhRate}]}});
 
-  const tr = p => p.samples ? `↓ ${_hhB(p.rx_bytes)} · ↑ ${_hhB(p.tx_bytes)}` : '—';
-  const net = _hhCard('Сеть' + (info.iface ? '<span class="hh-iface"> · ' + escHtml(info.iface) + '</span>' : ''),
-    `<span>Трафик за период:</span> ${tr(d.cur)}<br><span>Раньше:</span> ${tr(d.prev)}`,
-    _hhStats(d, 'rx', _hhRate, false, 'Входящий') + _hhStats(d, 'tx', _hhRate, false, 'Исходящий'),
-    {id: 'net', fmt: _hhRate, series: [
-      {k: 'rx', label: 'входящий ↓', color: C1, area: true, peak: 'rxm'},
-      {k: 'tx', label: 'исходящий ↑', color: C2, peak: 'txm'}]});
-
+  // Диск: место — цифрой и шкалой, на графике — чтение вверх, запись вниз.
+  const ldisks = (h && h.disks) || [], rootD = ldisks.find(x => x.mount === '/');
+  const dPct = n.disk_total ? n.disk_used / n.disk_total * 100 : null, dL = dPct == null ? '' : _hhLvl(dPct, 75, 90);
   const dd = d.cur.disk_delta || 0;
-  const ddTxt = Math.abs(dd) < 1048576 ? '<span>почти не менялось</span>'
-    : (dd > 0 ? '+' : '−') + _hhB(Math.abs(dd));
-  const disk = _hhCard('Диск', `<span>Занятое место за период:</span> ${ddTxt}`,
-    _hhStats(d, 'rd', _hhRate, false, 'Чтение') + _hhStats(d, 'wr', _hhRate, false, 'Запись'),
-    {id: 'disk', fmt: _hhRate, series: [
-      {k: 'rd', label: 'чтение', color: C1, area: true, peak: 'rdm'},
-      {k: 'wr', label: 'запись', color: C2, peak: 'wrm'}]});
+  const ddTxt = !d.cur.samples ? '' : Math.abs(dd) < MB ? _hhL(`за ${per} занятое место почти не менялось`, `last ${per}: used space almost unchanged`)
+    : dd > 0 ? _hhL(`за ${per} занято +${_hhB(dd)}`, `last ${per}: +${_hhB(dd)} used`)
+    : _hhL(`за ${per} освободилось ${_hhB(-dd)}`, `last ${per}: ${_hhB(-dd)} freed`);
+  const odisks = ldisks.filter(x => x.mount !== '/').map(x => `${x.mount}: ${x.percent != null ? x.percent + '%' : '—'}`);
+  const disk2 = [ddTxt, odisks.length ? _hhL('ещё ', 'also ') + odisks.join(', ') : ''].filter(Boolean).join(' · ');
+  const disk = _hhCard(d, {title: _hhL('Диск', 'Disk') + ` <small>· /${rootD && rootD.fstype ? ' · ' + escHtml(rootD.fstype) : ''}</small>`,
+    lvl: dL, lvlText: dL === 'warn' ? _hhL('мало места', 'low on space') : _hhL('место кончается', 'almost full'), pct: dPct,
+    now: n.disk_total
+      ? `<span class="hm-big">${_hhB(n.disk_used)}</span><span class="hm-of">${_hhL('из', 'of')} ${_hhB(n.disk_total)} · ${_hhPct(dPct)} · ${_hhL('свободно', 'free')} ${_hhB(n.disk_total - n.disk_used)}</span>`
+      : '<span class="hm-big muted">—</span>',
+    sub: [n._live ? '' : _hhL(`сейчас чтение ${_hhRate(n.rd)} · запись ${_hhRate(n.wr)}`, `now read ${_hhRate(n.rd)} · write ${_hhRate(n.wr)}`),
+          disk2 ? {html: escHtml(disk2), title: odisks.join('\n')} : ''],
+    chart: {id: 'disk', fmt: _hhRate, mirror: true, floor: 512 * KB, rows: [
+      {k: 'rd', peak: 'rdm', label: _hhL('чтение', 'read'), name: _hhL('чтение', 'read'), st: 'rd', fmt: _hhRate},
+      {k: 'wr', peak: 'wrm', label: _hhL('запись', 'write'), name: _hhL('запись', 'write'), st: 'wr', fmt: _hhRate}]}});
 
-  const cards = [cpu, load, ram, net, disk];
+  // Очередь к процессору (load average). Больше числа ядер — задачи ждут;
+  // черта на графике — эта граница, шкала всегда её вмещает.
+  const loadPct = cores ? n.load1 / cores * 100 : null, loadL = loadPct == null ? '' : _hhLvl(loadPct, 70, 100);
+  const load = _hhCard(d, {title: _hhL('Очередь к процессору', 'CPU queue') + ' <small>· load average</small>', lvl: loadL,
+    lvlText: loadL === 'warn' ? _hhL('почти полная', 'nearly full') : _hhL('задачи ждут', 'tasks are waiting'), pct: loadPct,
+    now: `<span class="hm-big">${_hhLoad(n.load1)}</span><span class="hm-of">${_hhL(
+      `за минуту · за 5 мин ${_hhLoad(n.load5)} · за 15 мин ${_hhLoad(n.load15)}`,
+      `1 min · 5 min ${_hhLoad(n.load5)} · 15 min ${_hhLoad(n.load15)}`)}</span>`,
+    sub: [_hhL('Сколько задач одновременно хотят процессор.', 'How many tasks want the CPU at the same time.') + (cores ? _hhL(
+      ` Больше ${cores} — по числу ядер — значит, задачи ждут своей очереди.`,
+      ` Above ${cores} — the number of cores — tasks wait their turn.`) : '')], subWrap: true,
+    chart: {id: 'load', fmt: _hhLoad, floor: cores * 1.25, ref: cores, refLabel: cores ? _hhCores(cores) : '',
+      rows: [{k: 'l', peak: 'lm', label: _hhL('среднее', 'average'), st: 'load', fmt: _hhLoad}]}});
+
+  const cards = [cpu, mem, net, disk, load];
   box.innerHTML = cards.map(c => c.html).join('') + _hhRecords(d.records || {});
   cards.forEach(c => _hhDraw(document.getElementById('hhChart_' + c.chart.id), d, c.chart));
 }
 
 function _hhRecords(r) {
   const rows = [
-    ['cpu', 'Процессор', _hhPct], ['load', 'Средняя нагрузка', _hhLoad], ['mem', 'ОЗУ', _hhB],
-    ['rx', 'Сеть, входящий', _hhRate], ['tx', 'Сеть, исходящий', _hhRate],
-    ['rd', 'Диск, чтение', _hhRate], ['wr', 'Диск, запись', _hhRate],
+    ['cpu', _hhL('Процессор', 'CPU'), _hhPct], ['load', _hhL('Очередь к процессору', 'CPU queue'), _hhLoad],
+    ['mem', _hhL('Память', 'Memory'), _hhB],
+    ['rx', _hhL('Сеть, входящий', 'Network, incoming'), _hhRate], ['tx', _hhL('Сеть, исходящий', 'Network, outgoing'), _hhRate],
+    ['rd', _hhL('Диск, чтение', 'Disk, read'), _hhRate], ['wr', _hhL('Диск, запись', 'Disk, write'), _hhRate],
   ].filter(([k]) => r[k]);
   if (!rows.length) return '';
-  return `<div class="health-card hh-card hh-rec">
-    <div class="health-card-title">Рекорды за всё время</div>
-    ${rows.map(([k, label, f]) => `<div class="hh-rec-row"><span class="hh-rec-l">${label}</span>
-      <span class="hh-rec-v">${f(r[k].v)}</span><span class="hh-rec-t">${_hhT(r[k].t, true)}</span></div>`).join('')}
-    <div class="health-sub">Максимум одного 10-секундного замера с начала сбора.</div>
-  </div>`;
+  return `<div class="hm-card"><div class="hm-top"><div class="hm-title">${_hhL('Рекорды', 'Records')} <small>· ${_hhL('за всё время', 'all time')}</small></div></div>
+    ${rows.map(([k, label, f]) => `<div class="hm-rec"><span class="l">${label}</span><span class="v">${f(r[k].v)}</span><span class="t">${_hhT(r[k].t, true)}</span></div>`).join('')}</div>`;
 }
 
-// «Круглая» верхняя граница шкалы (1, 2, 2.5, 5 × 10ⁿ; для байт — в своей единице).
+// «Круглая» верхняя граница шкалы (для байт — в своей единице).
 function _hhNiceMax(v, bytes) {
   if (!(v > 0)) return 1;
   let base = 1;
   if (bytes) while (v / base >= 1024) base *= 1024;
   const x = v / base, p = Math.pow(10, Math.floor(Math.log10(x)));
-  const m = [1, 2, 2.5, 5, 10].find(k => k * p >= x * 1.08) || 10;
+  const m = [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10].find(k => k * p >= x * 1.08) || 10;
+  if (bytes && m * p >= 1000) return base * 1024;     // «1000 КБ» → «1 МБ»
   return m * p * base;
 }
 
@@ -9458,56 +9446,132 @@ function _hhSvg(tag, attrs) {
   return e;
 }
 
-// Линии и области на SVG. Ось X — всё окно, чтобы простои были видны разрывами;
-// разрыв — пропуск дольше двух с половиной шагов.
+// Шаг графика задан периодом: час — по 2 минуты, сутки — по полчаса, неделя — по 4 часа,
+// 30 и 90 дней — по дням (мельче — суточный ритм «день/ночь» превращается в пилу).
+// Точки сервера укрупняются: среднее — с весом по числу замеров в точке (n), пик —
+// наибольший из пиков. Границы — по местным круглым часам; суточные деления — по
+// 24 часа назад от конца окна: календарный «сегодня» неполон и загибал бы хвост линии.
+const _HH_BUCKET = {'1h': 120, '24h': 1800, '7d': 14400, '30d': 86400, '90d': 86400};
+function _hhBucket(pts, rows, step, range, from, to) {
+  const b = _HH_BUCKET[range] || step;
+  if (b <= step) return {pts, step};
+  const org = b >= 86400 ? to % b : new Date().getTimezoneOffset() * 60, out = [];
+  let cur = null, key = null;
+  pts.forEach(p => {
+    // Точка сервера может начинаться чуть раньше окна — она относится к его первому делению.
+    const k = Math.floor((Math.max(p.t, from) - org) / b);
+    if (k !== key) { key = k; cur = {t: k * b + org, _w: 0}; out.push(cur); }
+    const w = p.n > 0 ? p.n : 1;
+    cur._w += w;
+    rows.forEach(r => {
+      cur[r.k] = (cur[r.k] || 0) + (p[r.k] || 0) * w;
+      if (r.peak) cur[r.peak] = Math.max(cur[r.peak] || 0, p[r.peak] || 0);
+    });
+  });
+  out.forEach(o => rows.forEach(r => { o[r.k] /= o._w; }));
+  return {pts: out, step: b};
+}
+
+// Плавная кривая через точки [x, y]. Монотонная: между двумя замерами не выгибается
+// выше или ниже них, то есть не рисует значений, которых не было.
+const _hhF1 = v => v.toFixed(1), _hhF2 = v => v.toFixed(2);
+function _hhCurve(P) {
+  const n = P.length;
+  if (n < 3) return P.map((p, j) => (j ? 'L' : 'M') + _hhF1(p[0]) + ',' + _hhF1(p[1])).join('');
+  const dx = [], s = [], t = new Array(n);
+  for (let i = 0; i < n - 1; i++) { dx[i] = P[i + 1][0] - P[i][0]; s[i] = (P[i + 1][1] - P[i][1]) / dx[i]; }
+  t[0] = s[0]; t[n - 1] = s[n - 2];
+  for (let i = 1; i < n - 1; i++)
+    t[i] = s[i - 1] * s[i] <= 0 ? 0 : 3 * (dx[i - 1] + dx[i]) / ((2 * dx[i] + dx[i - 1]) / s[i - 1] + (dx[i] + 2 * dx[i - 1]) / s[i]);
+  let out = 'M' + _hhF2(P[0][0]) + ',' + _hhF2(P[0][1]);
+  for (let i = 0; i < n - 1; i++) {
+    const h = dx[i] / 3;
+    out += 'C' + _hhF2(P[i][0] + h) + ',' + _hhF2(P[i][1] + h * t[i]) + ' ' + _hhF2(P[i + 1][0] - h) + ',' +
+      _hhF2(P[i + 1][1] - h * t[i + 1]) + ' ' + _hhF2(P[i + 1][0]) + ',' + _hhF2(P[i + 1][1]);
+  }
+  return out;
+}
+
+// Один график: плавная линия среднего на SVG. У сети и диска — «зеркало»: первая
+// величина вверх от нуля, вторая вниз, шкала общая. Ось X — всё окно, чтобы простои
+// были видны разрывами; разрыв — пропуск дольше двух с половиной шагов.
 function _hhDraw(box, d, cfg) {
   if (!box) return;
-  const W = box.clientWidth || 360, H = box.clientHeight || 140;
-  const padL = 44, padR = 6, padT = 8, padB = 20;
-  const iw = W - padL - padR, ih = H - padT - padB;
-  const pts = d.series || [];
-  const from = d.cur.from, to = d.cur.to, step = d.step;
-  const svg = _hhSvg('svg', {viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: 'none'});
+  const rows = cfg.rows, mirror = !!cfg.mirror;
+  const padL = 46, padR = 6, padT = 6, padB = 18, ih = mirror ? 52 : 96;
+  const plotH = mirror ? ih * 2 : ih, H = padT + plotH + padB, W = box.clientWidth || 360, iw = W - padL - padR;
+  const from = d.cur.from, to = d.cur.to;
+  const bk = _hhBucket(d.series || [], rows, d.step, d.range, from, to), pts = bk.pts, step = bk.step;
+  const svg = _hhSvg('svg', {viewBox: `0 0 ${W} ${H}`, height: H});
   const bytes = cfg.fmt === _hhB || cfg.fmt === _hhRate;
-
-  let top = cfg.yMax, m = 0;
-  pts.forEach(p => cfg.series.forEach(s => { m = Math.max(m, p[s.k] || 0); }));
-  if (!top) top = _hhNiceMax(m, bytes);
-  // Процессор: шкала не всегда до 100% — иначе 3% нагрузки сливаются с нулём.
-  else if (cfg.fmt === _hhPct) top = m > 50 ? 100 : _hhNiceMax(Math.max(m, 5), false);
   const X = t => padL + (t - from) / (to - from) * iw;
-  const Y = v => padT + ih - Math.min(1, Math.max(0, v / top)) * ih;
+  const mid = p => X(Math.max(from, Math.min(to, p.t + step / 2)));
 
-  [0, 0.5, 1].forEach(f => {
-    const y = padT + ih - f * ih;
-    svg.appendChild(_hhSvg('line', {x1: padL, x2: W - padR, y1: y, y2: y, class: 'hh-grid-l'}));
-    const t = _hhSvg('text', {x: padL - 6, y: y + 3.5, 'text-anchor': 'end', class: 'hh-ax'});
-    t.textContent = cfg.fmt(top * f).replace(/\/[сs]$/, '');
-    svg.appendChild(t);
-  });
-  // Граница «число ядер» у load — только если попадает в шкалу, иначе при
-  // нагрузке 0.2 на 4 ядрах график сплющился бы в ноль.
-  if (cfg.ref && cfg.ref <= top) {
-    const y = Y(cfg.ref);
-    svg.appendChild(_hhSvg('line', {x1: padL, x2: W - padR, y1: y, y2: y, class: 'hh-ref'}));
+  // Верх шкалы — «с запасом»: у шкалы есть нижний предел, и тихий сервер выглядит тихим,
+  // а не «пилой во весь рост». Процент — ступенями 25 / 50 / 100; память — до всего объёма;
+  // очередь — так, чтобы черта «N ядер» была видна всегда; сеть и диск — не меньше floor.
+  let m = 0;
+  pts.forEach(p => rows.forEach(r => { m = Math.max(m, p[r.k] || 0); }));
+  const top = cfg.pctScale ? (m <= 20 ? 25 : m <= 45 ? 50 : 100)
+    : cfg.yMax || Math.max(_hhNiceMax(m, bytes), cfg.floor || 0);
+  const zeroY = padT + ih;
+  const Y = (i, v) => { const h = Math.min(1, Math.max(0, v / top)) * ih; return mirror && i === 1 ? zeroY + h : zeroY - h; };
+  const lab = (y, txt) => { const t = _hhSvg('text', {x: padL - 6, y: y + 3.5, 'text-anchor': 'end', class: 'ax'}); t.textContent = txt; svg.appendChild(t); };
+  const topTxt = cfg.fmt(top).replace(/\/[сs]$/, '').replace(/\.0%$/, '%');
+
+  // Сетка и подписи оси Y: верх и ноль (у «зеркала» — верх с обеих сторон).
+  svg.appendChild(_hhSvg('line', {x1: padL, x2: W - padR, y1: padT, y2: padT, class: 'gl'}));
+  lab(padT, topTxt);
+  svg.appendChild(_hhSvg('line', {x1: padL, x2: W - padR, y1: zeroY, y2: zeroY, class: mirror ? 'zl' : 'gl'}));
+  lab(zeroY, '0');
+  if (mirror) {
+    svg.appendChild(_hhSvg('line', {x1: padL, x2: W - padR, y1: padT + plotH, y2: padT + plotH, class: 'gl'}));
+    lab(padT + plotH, topTxt);
   }
-  const long = _hhLong(d.range);
-  const nx = W < 420 ? 3 : 5;
+  // Граница «число ядер» у очереди к процессору.
+  if (cfg.ref && cfg.ref <= top) {
+    const y = Y(0, cfg.ref);
+    svg.appendChild(_hhSvg('line', {x1: padL, x2: W - padR, y1: y, y2: y, class: 'ref'}));
+    const t = _hhSvg('text', {x: W - padR, y: y - 4, 'text-anchor': 'end', class: 'ref-t'});
+    t.textContent = cfg.refLabel || String(cfg.ref);
+    svg.appendChild(t);
+  }
+  const long = _hhLong(d.range), nx = 3;
   for (let i = 0; i <= nx; i++) {
     const t = from + (to - from) * i / nx;
-    const el = _hhSvg('text', {x: X(t), y: H - 5, class: 'hh-ax',
-      'text-anchor': i === 0 ? 'start' : i === nx ? 'end' : 'middle'});
-    el.textContent = long ? _hhDay(t) : _hhT(t);
-    svg.appendChild(el);
+    const e = _hhSvg('text', {x: X(t), y: H - 4, class: 'ax', 'text-anchor': i === 0 ? 'start' : i === nx ? 'end' : 'middle'});
+    e.textContent = long ? _hhDay(t) : _hhT(t);
+    svg.appendChild(e);
   }
 
   if (!pts.length) {
-    const t = _hhSvg('text', {x: padL + iw / 2, y: padT + ih / 2, 'text-anchor': 'middle', class: 'hh-nodata'});
-    t.textContent = 'Данные копятся';
+    const t = _hhSvg('text', {x: padL + iw / 2, y: padT + plotH / 2 + 4, 'text-anchor': 'middle', class: 'nodata'});
+    t.textContent = _hhL('Данные копятся — первая точка через минуту', 'Collecting data — the first point in a minute');
     svg.appendChild(t);
     box.replaceChildren(svg);
     return;
   }
+
+  // Метка пика: тонкая черта в момент самого высокого замера за период и ромб на краю
+  // поля. Момент — из сводки (max_t), он точнее укрупнённых делений графика.
+  const stats = (d.cur && d.cur.stats) || {};
+  const peaks = rows.map((r, i) => {
+    const s = stats[r.st];
+    if (!s || !s.max_t || s.max_t < from || s.max_t > to) return null;
+    return {x: X(s.max_t), y: mirror && i === 1 ? padT + plotH : padT};
+  }).filter(Boolean);
+  peaks.forEach(p => svg.appendChild(_hhSvg('line', {x1: p.x, x2: p.x, y1: p.y, y2: zeroY, class: 'pk-l'})));
+
+  // Заливка под линией тает к нулю: поле не превращается в сплошной цветной блок.
+  const defs = _hhSvg('defs', {});
+  rows.forEach((r, i) => {
+    const lg = _hhSvg('linearGradient', {id: `hhg-${cfg.id}-${i}`, gradientUnits: 'userSpaceOnUse', x1: 0, x2: 0,
+      y1: mirror && i === 1 ? padT + plotH : padT, y2: zeroY});
+    lg.appendChild(_hhSvg('stop', {offset: 0, style: 'stop-color:var(--accent);stop-opacity:.3'}));
+    lg.appendChild(_hhSvg('stop', {offset: 1, style: 'stop-color:var(--accent);stop-opacity:.03'}));
+    defs.appendChild(lg);
+  });
+  svg.appendChild(defs);
 
   const segs = [];
   let seg = [];
@@ -9516,35 +9580,36 @@ function _hhDraw(box, d, cfg) {
     seg.push(p);
   });
   segs.push(seg);
-  const mid = p => X(Math.min(to, p.t + step / 2));      // точка — в середине шага
-
-  cfg.series.filter(s => s.area).forEach(s => segs.forEach(sg => {
+  const P = (sg, i, k) => sg.map(p => [mid(p), Y(i, p[k] || 0)]);
+  rows.forEach((r, i) => segs.forEach(sg => {
     if (!sg.length) return;
-    let dd = `M${mid(sg[0]).toFixed(1)},${Y(0).toFixed(1)}`;
-    sg.forEach(p => { dd += `L${mid(p).toFixed(1)},${Y(p[s.k] || 0).toFixed(1)}`; });
-    dd += `L${mid(sg[sg.length - 1]).toFixed(1)},${Y(0).toFixed(1)}Z`;
-    svg.appendChild(_hhSvg('path', {d: dd, fill: s.color, 'fill-opacity': 0.14, stroke: 'none'}));
-  }));
-  cfg.series.forEach(s => segs.forEach(sg => {
-    if (!sg.length) return;
-    const a = {d: sg.map((p, i) => (i ? 'L' : 'M') + mid(p).toFixed(1) + ',' + Y(p[s.k] || 0).toFixed(1)).join(''),
-               fill: 'none', stroke: s.color, 'stroke-width': s.dash ? 1.25 : 2,
-               'stroke-linejoin': 'round', 'stroke-linecap': 'round'};
-    if (s.dash) { a['stroke-dasharray'] = '3 3'; a['stroke-opacity'] = 0.75; }
+    const pp = P(sg, i, r.k), line = _hhCurve(pp);
+    svg.appendChild(_hhSvg('path', {d: `M${_hhF1(pp[0][0])},${zeroY}L` + line.slice(1) + `L${_hhF1(pp[pp.length - 1][0])},${zeroY}Z`,
+      fill: `url(#hhg-${cfg.id}-${i})`, stroke: 'none'}));
+    const a = {d: line, fill: 'none', stroke: 'var(--accent)', 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round'};
     if (sg.length === 1) { a.d += 'l0.01,0'; a['stroke-width'] = 4; }   // одиночная точка
     svg.appendChild(_hhSvg('path', a));
   }));
+  if (mirror) {
+    // Подписи полос стоят слева; если туда же попала метка пика — уходят вправо.
+    const right = peaks.some(p => p.x < padL + 90) && !peaks.some(p => p.x > W - padR - 90);
+    const lx = right ? W - padR - 6 : padL + 6, anchor = right ? 'end' : 'start';
+    const a = _hhSvg('text', {x: lx, y: padT + 13, 'text-anchor': anchor, class: 'lane'}); a.textContent = rows[0].label; svg.appendChild(a);
+    const b = _hhSvg('text', {x: lx, y: padT + plotH - 6, 'text-anchor': anchor, class: 'lane'}); b.textContent = rows[1].label; svg.appendChild(b);
+  }
+  peaks.forEach(p => svg.appendChild(_hhSvg('rect', {x: _hhF1(p.x - 3), y: p.y - 3, width: 6, height: 6,
+    transform: `rotate(45 ${_hhF1(p.x)} ${p.y})`, class: 'pk'})));
 
   // Слой наведения: перекрестие, точки на линиях, подсказка.
-  const xh = _hhSvg('line', {y1: padT, y2: padT + ih, class: 'hh-xh', visibility: 'hidden'});
+  const xh = _hhSvg('line', {y1: padT, y2: padT + plotH, class: 'xh', visibility: 'hidden'});
   svg.appendChild(xh);
-  const marks = cfg.series.map(s => {
-    const c = _hhSvg('circle', {r: 4, fill: s.color, class: 'hh-mark', visibility: 'hidden'});
+  const marks = rows.map(() => {
+    const c = _hhSvg('circle', {r: 4, fill: 'var(--accent)', class: 'mk', visibility: 'hidden'});
     svg.appendChild(c);
     return c;
   });
   const tip = document.createElement('div');
-  tip.className = 'hh-tip';
+  tip.className = 'hm-tip';
   tip.hidden = true;
   box.replaceChildren(svg, tip);
 
@@ -9558,18 +9623,16 @@ function _hhDraw(box, d, cfg) {
     pts.forEach(p => { const dx = Math.abs(mid(p) - x); if (dx < bd) { bd = dx; best = p; } });
     const px = mid(best);
     xh.setAttribute('x1', px); xh.setAttribute('x2', px); xh.setAttribute('visibility', 'visible');
-    cfg.series.forEach((s, i) => {
-      marks[i].setAttribute('cx', px); marks[i].setAttribute('cy', Y(best[s.k] || 0));
+    rows.forEach((s, i) => {
+      marks[i].setAttribute('cx', px); marks[i].setAttribute('cy', Y(i, best[s.k] || 0));
       marks[i].setAttribute('visibility', 'visible');
     });
-    const span = step >= 3600 ? `${_hhT(best.t, true)} — ${_hhT(best.t + step)}`
+    const span = step >= 86400 ? `${_hhT(best.t, true)} — ${_hhT(best.t + step, true)}`
+      : step >= 3600 ? `${_hhT(best.t, true)} — ${_hhT(best.t + step)}`
       : step > 60 ? `${_hhT(best.t, d.range !== '1h')} — ${_hhT(best.t + step)}` : _hhT(best.t);
-    tip.innerHTML = `<div class="hh-tip-t">${span}</div>` + cfg.series.map(s => {
-      const pk = s.peak && best[s.peak] != null
-        ? `<span class="hh-tip-pk"><span>пик</span> ${cfg.fmt(best[s.peak])}</span>` : '';
-      return `<div class="hh-tip-r"><i style="background:${s.color}"></i><span>${escHtml(s.label)}</span>` +
-             `<b>${cfg.fmt(best[s.k] || 0)}</b>${pk}</div>`;
-    }).join('');
+    tip.innerHTML = `<div class="t">${span}</div>` + rows.map(s =>
+      `<div class="r">${escHtml(s.label)}<b>${cfg.fmt(best[s.k] || 0)}</b>` +
+      (s.peak && best[s.peak] != null ? `<em>${_hhL('пик', 'peak')} ${cfg.fmt(best[s.peak])}</em>` : '') + '</div>').join('');
     tip.hidden = false;
     // Справа от курсора, не влезает — слева, не влезает и так (телефон) —
     // прижимаем к краю графика: за карточку подсказка не вылезает.

@@ -476,8 +476,11 @@ def _wrap_server_return(block):
     и запросы к /.well-known/. Внутри `location /` он ведёт себя как обычно —
     редиректит всё, кроме путей с более точным совпадением.
     """
+    # Любой код, не только 301/302: certbot оставляет на уровне server
+    # `return 404; # managed by Certbot` — он съедает челлендж точно так же.
+    # Хвост строки (комментарий certbot) остаётся на месте.
     depth = 0
-    for m in re.finditer(r'[{}]|^[ \t]*(return\s+30[12]\s+[^;]+;)[ \t]*$', block, re.M):
+    for m in re.finditer(r'[{}]|^[ \t]*(return\s+\d{3}(?:\s+[^;]+)?;)', block, re.M):
         tok = m.group(0)
         if tok == '{':
             depth += 1
@@ -492,6 +495,80 @@ def _wrap_server_return(block):
         wrapped = ('location / {\n        %s\n    }' % stmt)
         return block[:m.start(1)] + wrapped + block[m.end(1):]
     return block
+
+
+def _block_end(text, ob):
+    """Индекс закрывающей скобки для `{` в позиции ob (или -1)."""
+    depth = 0
+    for j in range(ob, len(text)):
+        if text[j] == '{':
+            depth += 1
+        elif text[j] == '}':
+            depth -= 1
+            if depth == 0:
+                return j
+    return -1
+
+
+def _lift_server_ifs(block):
+    """Переносит `if (…) { return 30x …; }` с уровня server внутрь `location /`.
+
+    Так certbot пишет редирект на https сам:
+        if ($host = example.com) { return 301 https://$host$request_uri; } # managed by Certbot
+    `if` на уровне server отрабатывает в rewrite-фазе, ДО выбора location, как и
+    голый return, — и уводит на https запрос челленджа (Nikola, 20.11.2026: проверка
+    была вписана правильно, а продление всё равно падало на 301). Внутри
+    `location /` это ровно тот же редирект для всего, кроме /.well-known/.
+    """
+    lifted = []
+    while True:
+        depth, hit = 0, None
+        for m in re.finditer(r'[{}]|\bif\s*\(', block):
+            tok = m.group(0)
+            if tok == '{':
+                depth += 1
+                continue
+            if tok == '}':
+                depth -= 1
+                continue
+            if depth != 1:
+                continue
+            ob = block.find('{', m.end())
+            cb = _block_end(block, ob) if ob >= 0 else -1
+            if cb < 0:
+                break
+            if not re.search(r'\breturn\s+30[1278]\b', block[ob:cb]):
+                continue
+            line_start = block.rfind('\n', 0, m.start()) + 1
+            line_end = block.find('\n', cb)
+            line_end = len(block) if line_end < 0 else line_end + 1
+            hit = (line_start, line_end, block[m.start():cb + 1])
+            break
+        if not hit:
+            break
+        start, end, stmt = hit
+        lifted.append(stmt.replace('\n', '\n    '))
+        block = block[:start] + block[end:]
+    if not lifted:
+        return block
+    ifs = '\n        '.join(lifted)
+    m = None
+    depth = 0
+    for t in re.finditer(r'[{}]|\blocation\s+/\s*\{', block):
+        tok = t.group(0)
+        if tok == '{':
+            depth += 1
+        elif tok == '}':
+            depth -= 1
+        elif depth == 1:
+            m = t
+            break
+        else:
+            depth += 1  # «location … {» тоже открывает скобку
+    if m:
+        return block[:m.end()] + '\n        ' + ifs + block[m.end():]
+    close = block.rfind('}')
+    return block[:close] + '    location / {\n        %s\n    }\n' % ifs + block[close:]
 
 
 def cert_domains(domain=''):
@@ -592,18 +669,22 @@ def ensure_acme_http(domain=''):
     if not path:
         return False, ('в конфигах nginx нет server-блока на 80 порту — '
                        'добавить челлендж некуда')
-    block = text[start:end]
-    if ACME_MARK in block:
-        # Строка есть, а запрос не проходит: правил её кто-то ещё или nginx не
+    old_block = text[start:end]
+    # Редиректы уровня server (голый return и certbot-овский if) — внутрь
+    # location /: иначе они уводят на https и запрос челленджа.
+    block = _lift_server_ifs(_wrap_server_return(old_block))
+    if ACME_MARK not in block:
+        brace = block.find('{')
+        if brace < 0:
+            return False, 'не разобрал server-блок в %s' % path
+        block = block[:brace + 1] + ACME_LOCATION + block[brace + 1:]
+    if block == old_block:
+        # Править нечего, а запрос не проходит: правил кто-то ещё или nginx не
         # перечитал конфиг. Перезагружаем и проверяем ещё раз.
         run_cmd('systemctl reload nginx')
         ok2, why = _acme_wait(domain)
         return (True, 'nginx перечитал конфиг') if ok2 else (False, why)
-    block = _wrap_server_return(block)
-    brace = block.find('{')
-    if brace < 0:
-        return False, 'не разобрал server-блок в %s' % path
-    new_text = text[:start] + block[:brace + 1] + ACME_LOCATION + block[brace + 1:] + text[end:]
+    new_text = text[:start] + block + text[end:]
     backup = os.path.join(DATA_DIR, 'nginx-backup')
     stamp = time.strftime('%Y%m%d-%H%M%S')
     try:

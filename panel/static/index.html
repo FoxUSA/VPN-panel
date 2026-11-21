@@ -1995,82 +1995,97 @@ body::before {
 #truthsModal .tiw-ip { font-family: 'JetBrains Mono', monospace; color: var(--text); }
 
 /* Health modal — server vitals */
-.health-grid { display: grid; grid-template-columns: repeat(2, 1fr); grid-auto-rows: 1fr; gap: 12px; align-items: stretch; }
-.health-card { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
-.health-card-wide { grid-column: 1 / -1; }
-.health-card-title { font-size: 14px; font-weight: 600; color: var(--text); margin-bottom: 10px; }
-.health-sub { font-size: 12px; color: var(--text3); margin-top: 4px; }
-.health-bar { position: relative; height: 20px; border-radius: 5px; background: var(--border); overflow: hidden; }
-.health-bar-fill { position: absolute; left: 0; top: 0; bottom: 0; transition: width 0.4s ease, background 0.4s ease; }
-.health-bar-label { position: absolute; left: 0; right: 0; top: 0; bottom: 0; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; color: var(--text); text-shadow: 0 0 3px rgba(0,0,0,0.5); }
-.health-cores { display: flex; gap: 3px; align-items: flex-end; height: 34px; margin-top: 10px; }
-.health-core { flex: 1 1 0; min-width: 0; height: 100%; background: var(--border); border-radius: 2px; display: flex; align-items: flex-end; overflow: hidden; }
-.health-core-fill { width: 100%; border-radius: 2px; transition: height 0.4s ease, background 0.4s ease; }
-.health-net-total { display: flex; gap: 16px; font-size: 15px; font-weight: 600; color: var(--text); margin-bottom: 10px; }
-.health-net-row { padding: 6px 0; border-top: 1px solid var(--border); }
-.health-net-row:first-of-type { border-top: none; }
-.health-net-name { font-size: 13px; color: var(--text); font-weight: 600; }
-.health-net-rates { display: flex; gap: 14px; font-size: 13px; color: var(--text2); margin-top: 2px; }
-.health-pill { font-size: 10px; padding: 1px 6px; border-radius: 3px; background: var(--accent-glow); color: var(--accent); border: 1px solid var(--accent); font-weight: 500; vertical-align: middle; }
-.health-disk { margin-bottom: 12px; }
-.health-disk:last-child { margin-bottom: 0; }
-.health-disk-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 6px; flex-wrap: wrap; }
-.health-disk-mount { font-size: 13px; color: var(--text); font-weight: 600; font-family: monospace; }
-.health-disk-head .health-sub { margin-top: 0; }
-.health-footer { margin-top: 12px; font-size: 12px; color: var(--text3); text-align: center; }
-@media (max-width: 720px) { .health-grid { grid-template-columns: 1fr; grid-auto-rows: auto; } }
-
-/* История нагрузки — графики за период под live-карточками. */
-.health-scroll { max-height: 62vh; overflow-y: auto; overflow-x: hidden; padding-right: 4px; }
-.hh-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin: 20px 0 4px; }
-.hh-title { font-size: 15px; font-weight: 600; color: var(--text); }
-.hh-seg { display: inline-flex; gap: 2px; padding: 3px; background: var(--bg); border: 1px solid var(--border2); border-radius: 10px; }
-.hh-seg button { border: 0; background: transparent; color: var(--text2); font: inherit; font-size: 13px; font-weight: 600; padding: 6px 12px; border-radius: 7px; cursor: pointer; white-space: nowrap; user-select: none; -webkit-user-select: none; }
-.hh-seg button:hover { color: var(--text); }
-.hh-seg button.active { background: var(--accent); color: #0a1224; }
-.hh-note { font-size: 12px; color: var(--text3); margin-bottom: 12px; }
-.hh-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.hh-card { min-width: 0; display: flex; flex-direction: column; }
-.hh-card .hh-legend { margin-top: auto; }   /* графики соседних карточек — на одной линии */
-.hh-iface { font-weight: 400; color: var(--text3); }
-.hh-card .health-card-title { margin-bottom: 4px; }
-.hh-sub { margin-top: 0; line-height: 1.5; }
-.hh-empty { grid-column: 1 / -1; padding: 6px 0; }
-.hh-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin: 10px 0 8px; }
-.hh-stats-n { font-size: 12px; font-weight: 600; color: var(--text2); margin-top: 10px; }
-.hh-stats-n + .hh-stats { margin-top: 4px; }
-.hh-ms { background: var(--bg2); border: 1px solid var(--border); border-radius: 7px; padding: 6px 8px; min-width: 0; }
-.hh-ms-l, .hh-ms-v, .hh-ms-d { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.hh-ms-l { font-size: 10.5px; color: var(--text3); text-transform: uppercase; letter-spacing: .3px; }
-.hh-ms-v { font-size: 14px; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
-.hh-ms-d { font-size: 11px; color: var(--text3); }
-.hh-ms-d.up { color: var(--orange); }
-.hh-ms-d.down { color: var(--green); }
-.hh-legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 11.5px; color: var(--text2); margin-bottom: 2px; }
-.hh-legend i { display: inline-block; width: 14px; height: 0; border-top: 2px solid; vertical-align: middle; margin-right: 5px; }
-.hh-legend i.dash { border-top-style: dashed; }
-.hh-chart { position: relative; height: 140px; touch-action: pan-y; }
-.hh-chart svg { display: block; width: 100%; height: 100%; overflow: visible; }
-.hh-chart .hh-ax { fill: var(--text3); font-size: 10.5px; font-family: inherit; }
-.hh-chart .hh-grid-l { stroke: var(--border); stroke-width: 1; }
-.hh-chart .hh-xh { stroke: var(--border2); stroke-width: 1; }
-.hh-chart .hh-mark { stroke: var(--bg); stroke-width: 2; }
-.hh-chart .hh-nodata { fill: var(--text3); font-size: 12px; }
-.hh-chart .hh-ref { stroke: var(--orange); stroke-width: 1; stroke-dasharray: 4 4; stroke-opacity: .6; }
-.hh-tip { position: absolute; top: 4px; max-width: 100%; pointer-events: none; background: var(--bg2); border: 1px solid var(--border2); border-radius: 8px; padding: 6px 9px; font-size: 12px; line-height: 1.45; box-shadow: 0 6px 18px rgba(0,0,0,.4); z-index: 2; }
-.hh-tip[hidden] { display: none; }
-.hh-tip-t { color: var(--text3); margin-bottom: 2px; white-space: nowrap; }
-/* Пик переносится под значение, когда строка не влезает в ширину графика. */
-.hh-tip-r { display: flex; flex-wrap: wrap; align-items: center; column-gap: 6px; color: var(--text); }
-.hh-tip-r > span { white-space: nowrap; }
-.hh-tip-r i { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
-.hh-tip-r b { font-weight: 600; margin-left: auto; padding-left: 10px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.hh-tip-r .hh-tip-pk { color: var(--text3); font-weight: 400; margin-left: auto; padding-left: 8px; }
-.hh-rec-row { display: flex; align-items: baseline; gap: 10px; padding: 5px 0; border-top: 1px solid var(--border); font-size: 13px; }
-.hh-rec-row:first-of-type { border-top: none; }
-.hh-rec-l { flex: 1 1 auto; min-width: 0; color: var(--text2); }
-.hh-rec-v { font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.hh-rec-t { flex: 0 0 auto; color: var(--text3); font-size: 12px; white-space: nowrap; }
+/* «Здоровье сервера» → «Нагрузка». Вид — макет «Нагрузка сервера» v3 и страница
+   servermon (.dev/здоровье сервера) — держать в синхроне. Карточка: заголовок · статус →
+   крупная цифра → шкала → две строки пояснения → график → строка «среднее · пик».
+   Жирное в карточке одно — крупная цифра. */
+#healthModal .modal-xwide { width: 880px; }
+.health-scroll { max-height: 62vh; overflow-y: auto; overflow-x: hidden; padding-right: 4px;
+  --hm-hair: rgba(148, 163, 184, .13); }
+.hm-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px 16px; flex-wrap: wrap; padding: 2px 0 14px; }
+.hm-seg { display: inline-flex; gap: 2px; padding: 3px; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; }
+.hm-seg button { border: 0; background: transparent; color: var(--text2); font: 500 13px 'Outfit', sans-serif; padding: 6px 12px; border-radius: 7px; cursor: pointer; white-space: nowrap; user-select: none; -webkit-user-select: none; }
+.hm-seg button:hover { color: var(--text); }
+.hm-seg button.active { background: var(--accent); color: #0a1224; font-weight: 600; }
+.hm-meta { font-size: 12px; color: var(--text3); }
+.hm-meta .hm-err { color: var(--orange); }
+.hm-empty { grid-column: 1 / -1; color: var(--text3); font-size: 13px; padding: 6px 0; }
+.hm-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.hm-card { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px 14px; min-width: 0; }
+.hm-top { display: flex; align-items: baseline; gap: 8px; }
+.hm-title { font-size: 13px; font-weight: 500; color: var(--text2); flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hm-title small { font-size: 12px; font-weight: 400; color: var(--text3); }
+.hm-st { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text3); white-space: nowrap; }
+.hm-st i { width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
+.hm-st.warn { color: var(--orange); } .hm-st.warn i { background: var(--orange); }
+.hm-st.bad { color: var(--red); } .hm-st.bad i { background: var(--red); }
+.hm-now { display: flex; align-items: baseline; gap: 10px; margin-top: 10px; white-space: nowrap; }
+.hm-big { font-size: 30px; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; letter-spacing: -.4px; color: var(--text); }
+.hm-big + .hm-big { margin-left: 8px; }
+.hm-big.muted { color: var(--text3); }
+.hm-of { font-size: 13px; color: var(--text2); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.hm-cores { flex: 0 0 auto; display: flex; gap: 2px; align-items: flex-end; height: 22px; margin-left: auto; align-self: center; }
+.hm-cores i { width: 5px; height: 100%; background: var(--hm-hair); border-radius: 1.5px; position: relative; overflow: hidden; }
+.hm-cores i::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: var(--v); background: var(--text2); border-radius: 1.5px; }
+.hm-meter { height: 3px; border-radius: 2px; background: var(--hm-hair); margin-top: 12px; overflow: hidden; }
+.hm-meter i { display: block; height: 100%; border-radius: 2px; background: var(--text2); }
+.hm-meter.warn i { background: var(--orange); } .hm-meter.bad i { background: var(--red); }
+.hm-meter.off { visibility: hidden; }
+.hm-sub { font-size: 12px; line-height: 18px; height: 36px; overflow: hidden; color: var(--text3); margin-top: 8px; }
+.hm-sub div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hm-sub.wrap div { white-space: normal; }
+.hm-chart { position: relative; margin-top: 10px; touch-action: pan-y; }
+.hm-chart svg { display: block; width: 100%; overflow: visible; }
+.hm-chart .ax { fill: var(--text3); font-size: 10.5px; font-family: 'Outfit', sans-serif; }
+.hm-chart .gl { stroke: var(--hm-hair); stroke-width: 1; }
+.hm-chart .zl { stroke: var(--border2); stroke-width: 1; }
+.hm-chart .xh { stroke: var(--border2); stroke-width: 1; }
+.hm-chart .mk { stroke: var(--bg); stroke-width: 2; }
+.hm-chart .ref { stroke: var(--orange); stroke-width: 1; stroke-opacity: .7; }
+.hm-chart .ref-t { fill: var(--orange); font-size: 10.5px; font-family: 'Outfit', sans-serif; }
+.hm-chart .lane { fill: var(--text2); font-size: 11px; font-family: 'Outfit', sans-serif; paint-order: stroke; stroke: var(--bg); stroke-width: 4px; stroke-linejoin: round; }
+.hm-chart .pk { fill: var(--text2); stroke: var(--bg); stroke-width: 2; paint-order: stroke; }
+.hm-chart .pk-l { stroke: var(--border2); stroke-width: 1; }
+.hm-chart .nodata { fill: var(--text3); font-size: 12.5px; font-family: 'Outfit', sans-serif; }
+.hm-tip { position: absolute; top: 0; pointer-events: none; background: var(--bg2); border: 1px solid var(--border2); border-radius: 8px;
+  padding: 6px 10px; font-size: 12px; line-height: 1.55; box-shadow: 0 6px 18px rgba(0,0,0,.4); z-index: 2; white-space: nowrap; }
+.hm-tip[hidden] { display: none; }
+.hm-tip .t { color: var(--text3); }
+.hm-tip .r { display: flex; gap: 14px; color: var(--text2); }
+.hm-tip .r b { margin-left: auto; font-weight: 500; color: var(--text); font-variant-numeric: tabular-nums; }
+.hm-tip .r em { font-style: normal; color: var(--text3); min-width: 92px; text-align: right; }
+/* Строка «за период»: подписи тихие, значения обычным весом, ничего жирного. */
+.hm-ft { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 14px; row-gap: 2px;
+  margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--hm-hair); font-size: 12.5px; }
+.hm-ft.rows { grid-template-columns: minmax(84px, max-content) minmax(0, 1fr) max-content; }
+.hm-ft .h { font-size: 11.5px; color: var(--text3); }
+.hm-ft .n { color: var(--text2); white-space: nowrap; }
+.hm-ft .v { color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hm-ft .v em { font-style: normal; font-size: 11.5px; color: var(--text3); margin-left: 6px; }
+.hm-pk-g { display: inline-block; width: 6px; height: 6px; background: var(--text2); transform: rotate(45deg); margin: 0 7px 1px 1px; }
+.hm-rec { display: flex; align-items: baseline; gap: 10px; padding: 7px 0; border-top: 1px solid var(--hm-hair); font-size: 13px; }
+.hm-rec:first-of-type { border-top: 0; margin-top: 8px; }
+.hm-rec .l { flex: 1 1 auto; min-width: 0; color: var(--text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hm-rec .v { color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.hm-rec .t { flex: 0 0 84px; text-align: right; color: var(--text3); font-size: 12px; white-space: nowrap; }
+.hm-foot { font-size: 12px; line-height: 1.5; color: var(--text3); margin-top: 14px; }
+@media (max-width: 720px) {
+  .hm-grid { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .hm-seg { width: 100%; }
+  .hm-seg button { flex: 1 1 0; padding: 6px 4px; }
+  .hm-card { padding: 14px 14px 12px; }
+  .hm-big { font-size: 26px; }
+  /* ↓ и ↑ у сети в одну строку на телефоне не влезают — пояснение уходит под цифру */
+  .hm-now { flex-wrap: wrap; row-gap: 6px; }
+  .hm-sub { height: auto; }
+  .hm-ft.rows { grid-template-columns: max-content minmax(0, 1fr) minmax(0, 1fr); column-gap: 10px; }
+  .hm-ft .v em { display: block; margin-left: 0; }
+  .hm-rec .t { flex-basis: auto; }
+  /* Подсказка шире графика: пик — строкой под значением */
+  .hm-tip { white-space: normal; max-width: 100%; }
+  .hm-tip .r { flex-wrap: wrap; column-gap: 10px; }
+  .hm-tip .r em { min-width: 0; padding-left: 0; }
+}
 
 /* Вкладка «Мониторинг»: реквизиты сервера. */
 .probe-row { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-top: 1px solid var(--border); }
@@ -2091,9 +2106,8 @@ body::before {
 
 @media (max-width: 720px) {
   .fl-grid { grid-template-columns: minmax(0, 1fr); }
-  .hh-grid { grid-template-columns: minmax(0, 1fr); }
-  .hh-seg { display: flex; width: 100%; }
-  .hh-seg button { flex: 1 1 0; padding: 7px 2px; font-size: 12.5px; }
+  .hm-seg { display: flex; }
+  .hm-seg button { padding: 7px 2px; font-size: 12.5px; }
 }
 @media (max-width: 560px) {
   /* Подпись — строкой сверху, значение и «Копировать» — под ней: в три колонки
@@ -4855,22 +4869,18 @@ input[type="date"] { font-family: 'JetBrains Mono', monospace; letter-spacing: 0
 
     <div id="healthPaneLoad">
       <div class="health-scroll">
-        <p style="color:var(--text3);font-size:12px;margin-bottom:14px;">
-          Live-нагрузка сервера: ОЗУ, процессор, диски и сеть. Данные читаются прямо из ядра (<code>/proc</code>, <code>statvfs</code>) без внешних зависимостей и обновляются автоматически, пока окно открыто.
-        </p>
-        <div id="healthBody"></div>
-        <div class="hh-head">
-          <div class="hh-title">История нагрузки</div>
-          <div class="hh-seg" id="hhRange">
+        <div class="hm-bar">
+          <div class="hm-seg" id="hhRange">
             <button data-range="1h" onclick="hhSetRange('1h')">1 час</button>
             <button data-range="24h" onclick="hhSetRange('24h')">24 часа</button>
             <button data-range="7d" onclick="hhSetRange('7d')">7 дней</button>
             <button data-range="30d" onclick="hhSetRange('30d')">30 дней</button>
             <button data-range="90d" onclick="hhSetRange('90d')">90 дней</button>
           </div>
+          <div class="hm-meta" id="hhMeta"></div>
         </div>
-        <div class="hh-note">Панель сама замеряет нагрузку раз в 10 секунд и хранит историю 180 дней. Среднее и пик — за выбранный период, «Раньше» — за такой же период до него. Наведите на график или коснитесь его, чтобы увидеть значения.</div>
-        <div id="healthHist" class="hh-grid"></div>
+        <div id="healthHist" class="hm-grid"></div>
+        <div class="hm-foot">Замер раз в 10 секунд, история хранится 180 дней. Пик — самый высокий 10-секундный замер за период, ромб на графике — его момент. Стрелка у среднего — сдвиг к такому же периоду до него. Наведите на график или коснитесь его, чтобы увидеть значения.</div>
       </div>
     </div>
 
