@@ -1095,6 +1095,9 @@ def public_subscription(token):
     headers = {
         'Content-Type': 'text/plain; charset=utf-8',
         'subscription-userinfo': 'upload=0; download=0; total=0; expire=0',
+        # Как у /clash/: приложения подписок (Happ, v2RayTun, Clash-семейство)
+        # обновляют её раз в сутки — и по этим загрузкам панель видит приложение.
+        'Profile-Update-Interval': '24',
         'Cache-Control': 'no-store'
     }
     return (body, 200, headers)
@@ -1129,7 +1132,10 @@ _UA_APPS = (
     ('shadowrocket', 'Shadowrocket'), ('loon', 'Loon'), ('stash', 'Stash'),
     ('quantumult', 'Quantumult X'), ('surge', 'Surge'),
     ('clash-verge', 'Clash Verge'), ('clashverge', 'Clash Verge'), ('clashx', 'ClashX'),
-    ('flclash', 'FlClash'), ('clashmetaforandroid', 'Clash Meta'), ('mihomo', 'Mihomo'), ('clash.meta', 'Clash Meta'), ('clash', 'Clash'),
+    ('flclash', 'FlClash'), ('clashmetaforandroid', 'Clash Meta'),
+    # Свой лаунчер: «MihomoLauncher/3.1.2 clash.meta» — раньше «mihomo», с версией.
+    ('mihomolauncher', 'Mihomo Launcher'),
+    ('mihomo', 'Mihomo'), ('clash.meta', 'Clash Meta'), ('clash', 'Clash'),
     ('happ', 'Happ'), ('v2rayng', 'v2rayNG'), ('v2rayn', 'v2rayN'), ('v2raytun', 'v2RayTun'),
     ('streisand', 'Streisand'), ('v2box', 'V2Box'), ('onexray', 'OneXray'), ('foxray', 'FoXray'),
     ('hiddify', 'Hiddify'), ('karing', 'Karing'), ('nekobox', 'NekoBox'), ('nekoray', 'NekoRay'),
@@ -1143,6 +1149,11 @@ def _app_from_ua(ua):
         return ''
     for needle, name in _UA_APPS:
         if needle in low:
+            # Версию — только у своего лаунчера: в бейдже видно, у кого он не обновился.
+            if needle == 'mihomolauncher':
+                m = re.search(r'mihomolauncher/([\d.]+)', low)
+                if m:
+                    return name + ' ' + m.group(1).strip('.')
             return name
     if low.startswith('mozilla'):
         return 'браузер'

@@ -4730,6 +4730,18 @@ def _xray_inbound_kind(tag):
     return 'vless'
 
 
+# Адреса проверок задержки и «есть ли интернет»: Mihomo/Clash, Shadowrocket,
+# Loon и другие сами гоняют их через КАЖДЫЙ узел подписки — в т.ч. через тот,
+# которым никто не пользуется. Вход по таким соединениям не отмечаем, иначе
+# бейдж показывал «VLESS + Hysteria 2» и лишнее устройство (у клиента на
+# Mihomo через hysteria-in шёл только www.gstatic.com:443).
+_XRAY_PROBE_HOSTS = frozenset((
+    'www.gstatic.com', 'connectivitycheck.gstatic.com', 'clients3.google.com',
+    'connectivitycheck.android.com', 'cp.cloudflare.com', 'captive.apple.com',
+    'detectportal.firefox.com', 'www.msftconnecttest.com', 'www.qualcomm.cn',
+))
+
+
 def xray_last_ips_by_email():
     """Returns {email: {'ip', 'ts'}} merging persistent cache with fresh tail.
 
@@ -4759,7 +4771,7 @@ def xray_last_ips_by_email():
                     cache[email] = {'ip': ip or (cur or {}).get('ip', ''), 'ts': rec['ts'], 'via': via}
                     cur = cache[email]
                     changed = True
-                if kind:
+                if kind and (rec.get('host') or '').lower() not in _XRAY_PROBE_HOSTS:
                     via = cur.setdefault('via', {})
                     if rec['ts'] > via.get(kind, ''):
                         via[kind] = rec['ts']
@@ -5043,6 +5055,17 @@ def xray_status():
         _pf = c.get('profile_fetch') if isinstance(c.get('profile_fetch'), dict) else {}
         _app = max((v for v in _pf.values() if isinstance(v, dict) and v.get('app')),
                    key=lambda v: v.get('ts') or '', default=None)
+        # Приложение — только по СВЕЖЕЙ загрузке: профили и подписки клиенты
+        # обновляют раз в сутки (update-interval / Profile-Update-Interval).
+        # Старая загрузка ничего не говорит о том, чем клиент сидит сейчас:
+        # месячная загрузка Loon висела рядом с vless-ссылкой в Mihomo.
+        if _app:
+            try:
+                _age = now_ts - time.mktime(time.strptime(_app.get('ts') or '', '%Y-%m-%d %H:%M:%S'))
+            except Exception:
+                _age = None
+            if _age is None or _age > 2 * XRAY_RULE_UPDATE_INTERVAL:
+                _app = None
         item['app'] = {'name': _app['app'], 'ts': _app.get('ts', '')} if _app else {}
         if item['via_active']:
             item['devices'] = max(item['devices'], len(item['via_active']))

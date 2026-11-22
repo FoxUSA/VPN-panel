@@ -97,7 +97,7 @@ def register(app):
             import base64
             body = base64.b64encode((body.strip() + '\n').encode('utf-8')).decode('ascii')
             headers['subscription-userinfo'] = 'upload=0; download=0; total=0; expire=0'
-        if kind == 'clash':
+        if kind in ('clash', 'sub'):
             headers['Profile-Update-Interval'] = '24'
         # ?download=1 — кнопка «Скачать файл» в панели. Клиенты (Loon,
         # Shadowrocket, Clash) ходят по чистому URL и получают профиль как
