@@ -3562,6 +3562,7 @@ def _xray_apply_security(mode):
                 'privateKey': r_priv,
                 'publicKey': r_pub,
                 'shortIds': [secrets.token_hex(4)],
+                'minClientVer': XRAY_REALITY_MIN_CLIENT_VER,
             },
         }
         note = 'VLESS+Reality (маскировка под %s)' % prev_dest
@@ -7637,6 +7638,12 @@ MTG_UNIT_FILE = '/etc/systemd/system/mtg.service'
 # Куда Reality притворяется ходить. Сайт должен отдавать TLS 1.3 с H2 и быть
 # заведомо живым — иначе маскировка разваливается при первой же проверке.
 XRAY_REALITY_DEST = 'www.microsoft.com'
+# XRay ≥26.7.11 при пустом minClientVer молча требует клиента ≥26.3.27, а mihomo
+# (Clash, Mihomo Launcher) представляется старой версией — «REALITY authentication
+# failed» на любом профиле. Явное значение снимает ограничение. Проверено
+# 25.11.2026 на сервере без домена (XRay 26.11.9, mihomo 1.19.34): с ним и с
+# support-x25519mlkem768 в профиле Clash подключение проходит.
+XRAY_REALITY_MIN_CLIENT_VER = '1.0.0'
 
 
 def _xray_base_config(port, inbound):
@@ -7774,6 +7781,7 @@ def _install_xray():
                     'privateKey': r_priv,
                     'publicKey': r_pub,
                     'shortIds': [secrets.token_hex(4)],
+                    'minClientVer': XRAY_REALITY_MIN_CLIENT_VER,
                 },
             },
         }
@@ -11208,6 +11216,46 @@ def _xray_log_boot_heal():
 
 
 threading.Thread(target=_xray_log_boot_heal, daemon=True).start()
+
+
+def _xray_reality_minver_boot_heal():
+    """Reality-вход без minClientVer → вписать XRAY_REALITY_MIN_CLIENT_VER и
+    перезапустить ядро (см. комментарий у константы). Значение, заданное руками,
+    не трогаем — только отсутствующее. Конфиг, который ядро не примет, не
+    оставляем: откат к прежнему файлу."""
+    time.sleep(8)
+    try:
+        if not os.path.exists(XRAY_BIN) or not os.path.exists(XRAY_CONFIG):
+            return
+        with _xray_restart_lock:
+            with open(XRAY_CONFIG, 'r') as f:
+                before = f.read()
+            cfg = json.loads(before)
+            changed = 0
+            for ib in cfg.get('inbounds') or []:
+                rs = (ib.get('streamSettings') or {}).get('realitySettings')
+                if isinstance(rs, dict) and 'minClientVer' not in rs:
+                    rs['minClientVer'] = XRAY_REALITY_MIN_CLIENT_VER
+                    changed += 1
+            if not changed:
+                return
+            save_xray_config(cfg)
+            out, err, rc = run_cmd(f'{XRAY_BIN} run -test -c {XRAY_CONFIG}')
+            if rc != 0:
+                with open(XRAY_CONFIG, 'w') as f:
+                    f.write(before)
+                audit('warn', 'XRay: minClientVer для Reality не вписан — ядро не приняло конфиг, '
+                              'возвращён прежний.\n' + ((err or out or '').strip()[-400:]))
+                return
+        if run_cmd('systemctl is-active xray')[0].strip() in ('active', 'failed'):
+            schedule_xray_restart()
+        audit('info', f'XRay: Reality открыт для клиентов на mihomo (Clash) — minClientVer '
+                      f'{XRAY_REALITY_MIN_CLIENT_VER}, ядро перезапускается')
+    except Exception as e:
+        audit('warn', f'XRay: проверка minClientVer для Reality на старте: {e}')
+
+
+threading.Thread(target=_xray_reality_minver_boot_heal, daemon=True).start()
 
 
 PANEL_FIRST_PORT = 8081

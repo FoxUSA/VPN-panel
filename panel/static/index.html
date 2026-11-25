@@ -1109,6 +1109,8 @@ body::before {
   overflow-wrap: break-word;
 }
 .ul-card a:hover { text-decoration: underline; }
+.ul-card-line { font-size: 13px; line-height: 1.35; }
+.ul-card-note { color: var(--text3); font-size: 12px; }
 
 /* Modal width override for config */
 .modal-wide { width: 560px; max-width: 92vw; }
@@ -3130,7 +3132,8 @@ code.tpl-chip, .tpl-info-head code { font-family: 'JetBrains Mono', monospace; }
       </div>
       <div class="ul-card">
         <div class="ul-card-title">Наборы правил</div>
-        <a href="https://github.com/blackmatrix7/ios_rule_script/tree/release/rule" target="_blank" rel="noopener">blackmatrix7 / ios_rule_script</a>
+        <div class="ul-card-line"><a href="https://rules.byfox.dev/" target="_blank" rel="noopener">rules.byfox.dev</a> <span class="ul-card-note">для приложений</span></div>
+        <div class="ul-card-line"><a href="https://api.byfox.dev/" target="_blank" rel="noopener">api.byfox.dev</a> <span class="ul-card-note">для разработчиков</span></div>
       </div>
     </div>
     <div class="brand-line">

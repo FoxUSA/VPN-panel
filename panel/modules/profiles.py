@@ -814,6 +814,11 @@ def build_clash_profile(client, proxy_lines=None):
             out.append(f"    reality-opts:")
             out.append(f"      public-key: {xp['public_key']}")
             out.append(f"      short-id: {xp['short_id']}")
+            # XRay ≥26.9.8 не пускает Reality-клиента без ключа X25519MLKEM768,
+            # а mihomo шлёт его только с этой опцией (и отпечатком chrome) —
+            # без неё «REALITY authentication failed». Проверено 25.11.2026:
+            # mihomo 1.19.34 → XRay 26.11.9.
+            out.append(f"      support-x25519mlkem768: true")
         out.append(f"    packet-encoding: xudp")
         out.append(f"    udp: true")
         out.append("")

@@ -3590,6 +3590,8 @@ window.I18N_EN = {
   "Мозамбик": "Mozambique",
   "Молдова": "Moldova",
   "Наборы правил": "Rule sets",
+  "для приложений": "for client apps",
+  "для разработчиков": "for developers",
   "Назад": "Back",
   "Название (например, «Telegram» или «Мои сайты»)": "Name (e.g. «Telegram» or «My sites»)",
   "Найденный xray-конфиг: {xray_cfg}. Сейчас log.access =": "Found xray config: {xray_cfg}. Currently log.access =",

@@ -156,7 +156,10 @@ def _link_vless(u, qs, name):
     if _truthy(_q(qs, 'allowInsecure', 'insecure', 'allow_insecure')):
         p['skip-cert-verify'] = True
     if sec == 'reality':
-        p['reality-opts'] = {'public-key': _q(qs, 'pbk'), 'short-id': _q(qs, 'sid')}
+        # support-x25519mlkem768: без него XRay ≥26.9.8 отвечает mihomo
+        # «REALITY authentication failed» (см. profiles.py, Clash).
+        p['reality-opts'] = {'public-key': _q(qs, 'pbk'), 'short-id': _q(qs, 'sid'),
+                             'support-x25519mlkem768': True}
     _mihomo_transport(p, qs)
     return p
 
